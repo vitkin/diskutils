@@ -1,0 +1,210 @@
+#!/bin/bash
+#
+# confinedrv v1.1
+# (c) copyright by Elmar Stellnberger 2009, Jan 2010
+# private usage is free
+#
+
+rot=$'\e[1;31m'; blau=$'\e[1;34m'; nv=$'\e[0m'; ul=$'\e[4m';
+err() { echo -e "${rot}$@${nv}"; }
+msg() { echo -e "${blau}$@${nv}"; }
+
+ein() { local tok="$1";
+  while [ $# -gt 1 ]; do [ "$tok" = "$2" ] && return 0; shift; done
+  return 1;
+}
+
+droploop() {
+ local dest loop err=false
+ while read dest loop; do 
+    #echo losetup -d $loop;
+    losetup -d $loop || err=true;
+  done < <( grep "^$1" /dev/shm/confinedrv-loops;)
+  $err && return 1
+  mv /dev/shm/confinedrv-loops /dev/shm/confinedrv-loops.tmp
+  grep -v "^$1" </dev/shm/confinedrv-loops.tmp >/dev/shm/confinedrv-loops
+  rm -f /dev/shm/confinedrv-loops.tmp
+}
+
+verbose=false; readall=false; ret=0;
+
+while true; do
+case "$1" in
+  -h|--help) echo -e "confinedrv [--ra] sdx=sda1,2,3,4"
+             echo -e "  --ra ... everything at least readable"
+	     echo -e "confinedrv -d/-r/--remove sdx\n";
+	     echo -e "confinedrv -i/--info sdx\n"
+	     ;;
+  -d|-r|--remove) while [ -n "$2" ]; do
+		    drv="${2#/dev/mapper/}"
+		    dmsetup remove "$drv"
+		    droploop "$drv"; let ret+=$?
+		    shift
+		  done; exit $ret;;
+  -i|--info) while [ -n "$2" ]; do
+	       echo "*** $2 ***"
+	       dmsetup status $2; echo; shift;
+	     done;;
+  --ra) readall=true; shift; continue; ;;
+  -v|--verbose) verbose=true; shift; continue; ;;
+  *)
+
+read dest org <<<"${1/=/ }"
+read -a parts <<<"${org//,/ }"
+org=${parts[0]%%[0-9]*}
+parts[0]=${parts[0]#$org}
+#parts=($(sort -g <<<"${parts[@]}";))
+
+# echo $dest#$org#${parts[0]}
+# echo ${parts[@]}
+# echo ----------
+
+getdevno() {
+  local attr x usr grp major minor rest
+  read attr x usr grp major minor rest < <(ls -l "$1";)
+  echo "${major%,}:$minor"
+}
+
+
+mkdir -p /dev/shm/
+#bdev=$(getdevno /dev/$org)
+if [ -n "${parts[0]}" ]; then
+  loop=$(losetup -f)
+  losetup $loop /dev/$org
+else loop=""; parts=();
+fi
+
+rolp=$(losetup -f)
+losetup -r $rolp /dev/$org
+blockdev --setro $rolp
+chmod gua-w $rolp >/dev/null 2>&1 
+
+#echo "$dest $loop" >>/dev/shm/confinedrv-loops
+# -> later
+# fdisk -l reads block at 6422432/512 = 12543
+# part of sda1!
+
+# device mapper can only control access in chunks of pagesize = 4096 = 2**3*512
+
+alignstart() {
+  algnstart=$((start&~7))
+  if [[ pos -gt algnstart ]]; then let start=pos; # ok since space before already accessible
+                              else let start=algnstart; fi
+  #impossible: [[ pos -gt start ]] && { err "inconsistent input from fdisk; disks not ordered."; break; }
+}
+
+alignend() {
+  algnend=$((end&~7))
+  if [[ pos -gt algnend ]]; then let end=pos; # ok since space before already accessible
+                            else let end=algnend; fi
+  #impossible: [[ pos -gt end ]] && { err "inconsistent input from fdisk; zero/minus space partition"; break; }
+}
+
+skip() {
+  if [[ pos -lt $1 ]]; then
+    if $extphead||$readall; 
+      then echo "$pos $(($1-pos)) linear $rolp $pos";
+      else echo "$pos $(($1-pos)) error"
+    fi
+  fi
+}
+
+cleanup() {
+  sleep 0.3; rm "$drvtable"; losetup -d $rolp; [ -n "$loop" ] && losetup -d $loop
+}
+
+drvtable="$(mktemp)"; trap "cleanup" EXIT
+pos=0; found=0; extphead=false; extpend=-1;  #max=0;
+{
+while read dev start end blocks id type; do
+  dno="${dev#/dev/$org}"
+  if [ "$dev" != "$dno" ]; then 
+    if [[ pos -eq 0 ]]; then
+      echo "0 $start linear $rolp 0"
+      pos=$start;
+    fi
+    #echo "$dev $pos $start" >&2
+    if ein $dno "${parts[@]}"; then
+      alignstart
+      skip $start
+      echo "$start $((end-start+1)) linear $loop $start"
+      # not with alignment: echo "$start $((end+1-start)) linear /dev/$org$dno 0"
+      # if not aligned then dmsetup will extend attributes towards the end of partition
+      [[ extpend -le end ]] && extphead=false
+      pos=$((end+1)); let found++;
+      
+    elif [ "${type#*Erw}" != "$type" ]; then
+      alignstart
+      skip $start
+      extphead=true; extpend=$end
+      pos=$start
+      
+    elif $extphead; then
+      let start+=7 # aufrunden ! - extended partition head muß voll lesbar sein; danach kommt ausgeblendete Partition!
+      alignstart
+      skip $start
+      pos=$start
+      
+      let end+=1;  # Anfang nächster: end + 1
+      extphead=false; # skip soll hier ausblenden (außer -a)
+      alignend;      # Platz für den Beginn der nächsten schaffen: nach vorne
+      skip $((end))  # skip bearbeitet bis eins vorher
+      extphead=true
+      [[ extpend -le end ]] && extphead=false
+      pos=$((end))
+      
+    #else echo "unprocessed: $dev" >&2;
+    fi
+    #[[ max -lt end ]] && let max=end
+    #[[ min -gt start ]] && let min=start
+  fi
+done < <( fdisk -lu -b 512 /dev/$org | tr '*' ' ' | sort -g -k 2 -s; ) 
+max=$(blockdev --getsz /dev/$org)
+skip $max
+} >"$drvtable"
+
+if $verbose; then
+  msg "hdd mapping table:"
+  cat "$drvtable"
+  echo
+fi
+
+if [ "$found" -ne "${#parts[@]}" ]; then
+  err "overlapping partitions specified or";  # can detect this only in cases where partitions become fully overlapped
+  err "no such partition on disk."
+  msg "$found out of ${#parts[@]} partitions processed.\n"
+  cat "$drvtable"
+  cleanup
+  trap '' EXIT
+  ret=7
+  
+else
+ if [ -b /dev/mapper/$dest ]; then 
+   echo dmsetup reload $dest \<"$drvtable"
+   #dmsetup reload $dest <"$drvtable";
+   dmsetup remove $dest
+   droploop "$dest";
+   dmsetup create $dest <"$drvtable";
+ else 
+   echo dmsetup create $dest \<"$drvtable"
+   dmsetup create $dest <"$drvtable";
+ fi
+ ret=$?
+ #if [ $? -eq 0 ]; then rm "$drvtable"; else echo "please remove $drvtable manually!"; fi
+ if [ $ret -ne 0 ]; then
+   cleanup
+ else
+   rm "$drvtable"
+   [ -n "$loop" ] && echo "$dest $loop" >>/dev/shm/confinedrv-loops
+   echo "$dest $rolp" >>/dev/shm/confinedrv-loops
+ fi
+ trap '' EXIT
+ echo
+ 
+fi
+exit $ret
+
+;;
+esac;
+break;
+done
