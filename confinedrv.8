@@ -1,0 +1,86 @@
+.TH CONFINEDRV 8 "November 2013" "version 1.2.1" "Maintenance Commands"
+
+.SH NAME
+confinedrv \- limit an existing drives partitions to read-only or no-read access
+
+.SH SYNOPSIS
+.BI "confinedrv " "[OPTIONS] [--ra] sdx=sda1,2,3 { sdy=sdb5,6 ... } "
+.br
+.BI "confinedrv " "[OPTIONS] " "-d " "sdx { sdy ... } "
+.br
+.BI "confinedrv " "[OPTIONS] " "-i " "sdx { sdy ... } "
+.br
+.BI "confinedrv --version / --license / --help "
+.br
+
+.SH DESCRIPTION
+This tool allows you to limit existing partitions to read only or no-read access by creating an own virtual drive with confined access rights mirroring the original. This can f.i. be used by a virtual machine to safely boot into one or more operating systems that reside on the same disk as your host operating system.
+
+.SH SEMANTIC
+confinedrv will mirror your drive 1:1 giving read and write access to the specified sections on your disk. Only the mentioned partitions will be writable. If the \fI--ra\fR option is given then it will addtionally grant all other visible partitions read only access. Intermediate space between partitions will be shielded even against read access as long as it does not pertain to the extended partition. Extended partition intermediate spaces contain a linked list of partition tables which need to remain readable to ensure correct recognition of all partitions though they may themselves not be accessible. Note that specifying a whole extended partition as writable will even make these intermediate spaces writable so that repartitioning would still be possible to a certain extent if you would do that directly without tools. To avoid this do not specify the whole extended partition as writable but rather all its individual partitions because this will protect the partition table from suffering any damage.
+
+.SH OPTIONS
+.TP 22
+.B --ra
+make all visible partitions at least readable
+.TP
+.B "--verbose / -v"
+be more verbose; show mapping table for the drive to be created
+.TP
+.B "--quiet / -q"
+be less verbose; currently: do not warn about misaligned partitions; do not print the heading.
+.TP
+.B --license / -l
+show license information.
+.TP
+.B --help
+short summary of this man page
+.TP
+.B --version
+print current program version
+  
+.SH ADDITIONAL COMMANDS
+.TP
+.BI "-d " "MAPPED_DRIVE  { MAPPED_DRIVE ... } "
+unmap a drive that was previously mapped with confinedrv
+.TP
+.BI "-i " "MAPPED_DRIVE  { MAPPED_DRIVE ... } "
+retrieve information about mapped drives: currently only prints the mapping table
+.TP
+
+.SH EXAMPLES
+\fBconfinedrv --ra sdx=sda1,3 sdy=sda2,5,6,7\fP
+.br
+\fBconfinedrv -d sdx sdy\fP
+.br
+
+.SH RETURN VALUES
+\ \ \ 2xx ... confinedrv specific error codes
+.br
+   200 ~ EPERM (not run as root) 
+   207 ~ overlapping partitions (extended partition and subpartition of extended partition) specified or partition does not exist
+   222 ~ page size not divisible by 512
+   244 ~ internal error,
+   others ~ return values of dmsetup
+
+.SH FURTHER INFORMATION
+look for detailed usage informations at http://www.elstel.org/qemu
+.br
+get informed about the latest updates via http://www.elstel.org/elstel.rss
+.br
+note: your packager may have included an offline version of the respective web page with usage information for confinedrv at elstel.org in /usr/share/doc[/packages]/confinedrv/index.html
+
+.SH SEE ALSO
+.BR kpartx (8),
+.BR qemu (1),
+.BR dmsetup (8),
+.BR losetup (8)
+
+.SH AUTHORS
+
+.B confinedrv
+was invented, designed and programmed by Elmar Stellnberger <estellnb@elstel.org> (other emails: estellnb@gmail.com, estellnb@yahoo.de).
+
+.SH LICENSE
+This program may be used and modified for free. Whenever publishing or sending your changes to other people please adhere to the C-FSL license as given by an confinedrv --license. This program has been designed as research work and comes completely without any warranty.
+
