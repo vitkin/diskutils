@@ -1,28 +1,56 @@
 .TH CONFINEDRV 8 "November 2013" "version 1.2.1" "Maintenance Commands"
 
 .SH NAME
-confinedrv \- limit an existing drives partitions to read-only or no-read access
+confinedrv \- limit the partitions of an existing drive to read-only, read-write or no-read access
 
 .SH SYNOPSIS
-.BI "confinedrv " "[OPTIONS] [--ra] sdx=sda1,2,3 { sdy=sdb5,6 ... } "
+.B confinedrv
+.RI [ OPTIONS ]
+.RB [ --ra ] 
+.IR sdx=sda1,2,3 " [" "sdy=sdb5,6 ..." "]"
 .br
-.BI "confinedrv " "[OPTIONS] " "-d " "sdx { sdy ... } "
+.B confinedrv
+.RI [ OPTIONS ]
+.RB [ --ra ]
+.IB sdx=sda :r 1,2 :w 3 :e 8 :z 4,5,6 
+.IB \fR[\fIsdy=sdb :w 1 :r "2 ...\fR]"
 .br
-.BI "confinedrv " "[OPTIONS] " "-i " "sdx { sdy ... } "
+.B confinedrv 
+.RI [ OPTIONS ] 
+.RB { --remove | -r | -d } 
+.IR sdx " [ " "sdy ..."  " ] "
+.br
+.B confinedrv
+.RI [ OPTIONS ]
+.BI --loopusage " sdx [ sdy ... ]"
+.br
+.B confinedrv
+.RI [ OPTIONS ] 
+.RB { --info | -i  }
+.IR sdx " [ " "sdy ..." " ] "
 .br
 .BI "confinedrv --version / --license / --help "
 .br
 
 .SH DESCRIPTION
-This tool allows you to limit existing partitions to read only or no-read access by creating an own virtual drive with confined access rights mirroring the original. This can f.i. be used by a virtual machine to safely boot into one or more operating systems that reside on the same disk as your host operating system.
+This tool allows you to limit existing partitions to write, read only, zero on read or no-read access by creating an own virtual drive with confined access rights mirroring the original (\fINo read access simulates a disk error.\fR). This can f.i. be used by a virtual machine to safely boot into one or more operating systems that reside on the same disk as your host operating system.
 
 .SH SEMANTIC
-confinedrv will mirror your drive 1:1 giving read and write access to the specified sections on your disk. Only the mentioned partitions will be writable. If the \fI--ra\fR option is given then it will addtionally grant all other visible partitions read only access. Intermediate space between partitions will be shielded even against read access as long as it does not pertain to the extended partition. Extended partition intermediate spaces contain a linked list of partition tables which need to remain readable to ensure correct recognition of all partitions though they may themselves not be accessible. Note that specifying a whole extended partition as writable will even make these intermediate spaces writable so that repartitioning would still be possible to a certain extent if you would do that directly without tools. To avoid this do not specify the whole extended partition as writable but rather all its individual partitions because this will protect the partition table from suffering any damage.
+confinedrv will mirror your drive 1:1 giving read and write access to the specified sections on your disk. Only the mentioned partitions will be writable (\fIsimple format\fR). If the \fI--ra\fR option is given then it will addtionally grant all other visible partitions read only access. The second command line format allows to specify exactly for which partition read, write, zero or error on access should be granted. Intermediate space between partitions will be zeroed out by default (\fI--gap option\fR) as long as it does not pertain to the extended partition. Extended partition intermediate spaces contain a linked list of partition tables which need to remain readable to ensure correct recognition of all partitions though they may themselves not be accessible (\fIThese intermediate spaces will always be read only no matter what options are given.\fR). Note that specifying a whole extended partition as writable will even make these intermediate spaces writable so that repartitioning would still be possible to a certain extent if you would do that directly without tools. To avoid this do not specify the whole extended partition as writable but rather all its individual partitions because this will protect the partition table from suffering any damage.
+
+.SH WARNING
+confinedrv works on top of Device Mapper and can only limit access rights on a per memory page basis. On x86 systems a memory page used to be 4096 bytes while disk space keeps being organized in units of 512 bytes (4096*1/4=512). Be sure to align partitions to page bounderies when creating partitions with fdisk (\fIf.i. fdisk -H 32 -S 32 for 512KB alignment as also recommended for SSDs (32*32*512 = 2^5 * 2^5 * 512 = 1024 * 512 = 512K)\fR). Otherwise confinedrv will not be fully capable of protecting your drive (up to three blocks at the beginning and end of each partition may end up having extended access rights (\fI see --info or --verbose\fR).
 
 .SH OPTIONS
 .TP 22
 .B --ra
-make all visible partitions at least readable
+make all visible partitions at least readable (\fIdefault zeroeing out.\fR).
+.TP
+.RI "\fB--mbr\fR {" err | zero | ro | rw }
+set access rights for the master boot record, the master partition table and for everything before the first partition starts (\fIWould allow repartitioning only as long as there is no extended partition\fR). As the MBR is only 512 bytes it is not possible to protect the partition table once you wanna have the MBR writeable; default is ro.
+.TP
+.RI "\fB--gap\fR {" err | zero | ro | rw }
+set access rights for gaps between primary partitions (\fIgaps inside extended partition are always read-only.\fR); default is zero.
 .TP
 .B "--verbose / -v"
 be more verbose; show mapping table for the drive to be created
@@ -41,11 +69,15 @@ print current program version
   
 .SH ADDITIONAL COMMANDS
 .TP
-.BI "-d " "MAPPED_DRIVE  { MAPPED_DRIVE ... } "
+.RB { --remove | -r | -d } "\fI MAPPED_DRIVE  [ MAPPED_DRIVE ... ]\fR"
 unmap a drive that was previously mapped with confinedrv
 .TP
-.BI "-i " "MAPPED_DRIVE  { MAPPED_DRIVE ... } "
-retrieve information about mapped drives: currently only prints the mapping table
+.RB [ --noannot "] {" --info | -i }  "\fI MAPPED_DRIVE  [ MAPPED_DRIVE ... ] \fR"
+retrieve information about mapped drives: currently prints the mapping table
+--noannot: do not annotate partition start and end numbers with symbolic names.
+.TP
+.RI "\fB--loopusage\fR [ " "MAPPED_DRIVE ... " ]
+show all loop devices in use or all loop devices used by the given virtual drives
 .TP
 
 .SH EXAMPLES
@@ -60,6 +92,7 @@ retrieve information about mapped drives: currently only prints the mapping tabl
    200 ~ EPERM (not run as root) 
    207 ~ overlapping partitions (extended partition and subpartition of extended partition) specified or partition does not exist
    222 ~ page size not divisible by 512
+   223 ~ error emulating /dev/zeroblock
    244 ~ internal error,
    others ~ return values of dmsetup
 
@@ -70,11 +103,15 @@ get informed about the latest updates via http://www.elstel.org/elstel.rss
 .br
 note: your packager may have included an offline version of the respective web page with usage information for confinedrv at elstel.org in /usr/share/doc[/packages]/confinedrv/index.html
 
+.SH NOTE
+confinedrv does currently not work for GPT partition tables. Only the traditional MSDOS partition tables for drives up to 1TB are supported.
+
 .SH SEE ALSO
 .BR kpartx (8),
 .BR qemu (1),
 .BR dmsetup (8),
-.BR losetup (8)
+.BR losetup (8),
+.BR fdisk (8)
 
 .SH AUTHORS
 

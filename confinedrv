@@ -6,6 +6,22 @@
 #  further information: www.elstel.org/com; look here for an actual contact address
 #  current email: estellnb@elstel.org; additional email estellnb@gmail.com
 #
+# v 1.7.1: small fixups (16.11.2014)
+#  * a problem in theory: eliminated race condition dropping loop devices, cleanup by --freeloop after kill -9
+#  * writable loop device only allocated if needed (previously: if any even non writable partition was specified)
+#  * acc2str -> access table printing: make a difference between zero and error
+#  * skip function is now more thoroughly documented
+#
+# v 1.7: fixing some boot issues and providing enhanced functionality
+#  * Certain boot problems which have arised under respective circumstances with v1.2.1 due to err-ing out gap spaces needed by grub or 
+#    other loaders rather than zeroing them out or making them available as read-only should now be resolved.
+#  * choose for any of three modes for every partition: read, write, error or zero (sdx=sda:r1:e2,3:w5,6,7:z8); default is now to zero
+#    out any parition which has not been mentioned rather than letting any access err there.
+#  * The --gap and --mbr options provide means for specifying the access rights for gaps between primary partitions or all the space
+#    before the first partition including the partition table and the MBR respectively.
+#  * The [--noannot] --info sdx now provides a better readable map of the partition table annotated with symbolic references for the
+#    start and end of partitions by default. --loopusage shows all loop devices in use by confinedrv.
+#
 # v 1.2.1: small fix (17.11.2013)
 #  * correctly allocate/deallocate loop drives if more than one virtual drive is specified on the command line
 #
@@ -21,6 +37,7 @@
 #
 
 license() {
+  echo -e "\e[1mThis program may be used under the terms of C-FSL v1.0:\e[0m"; echo
   cat <<EOQ
 CONVERTIBLE FREE SOFTWARE LICENSE
 	Version 1.0, 2016-08-10
@@ -62,19 +79,54 @@ ein() { local tok="$1";
   return 1;
 }
 
-droploop() {
- local dest loop err=false
- while read dest loop; do 
-    #echo losetup -d $loop;
-    losetup -d $loop || err=true;
-  done < <( grep "^$1 " /dev/shm/confinedrv-loops;)
-  $err && return 1
-  cp /dev/shm/confinedrv-loops /dev/shm/confinedrv-loops.tmp
-  grep -v "^$1 " </dev/shm/confinedrv-loops.tmp >/dev/shm/confinedrv-loops
-  rm -f /dev/shm/confinedrv-loops.tmp
+mkvar() { local rndup=$(roundup $1); local rnddwn=$(rounddown $1);
+  [[ -z "$annotdev" ]] && { err "localvars;"; exit; }
+  if [[ $rndup = $rnddwn ]]; then
+    export ${annotdev}${3/./_}_$rndup=$2$3; >&2
+  else
+    export ${annotdev}${3/./_}_$rndup=$2$3+$((rndup-$1)); >&2
+    export ${annotdev}${3/./_}_$rnddwn=$2$3-$(($1-rnddwn)); >&2
+  fi
 }
 
-verbose=1; readall=false; ret=0;
+slurpdev() { local annotdev basedev; annotdev="$1"; basedev="$2";
+  msg "slurping $basedev"
+  while read dev start end blocks id type; do
+    dno="${dev#$basedev}";
+    if [ "$dev" != "$dno" ]; then 
+      mkvar $start ${dev#/dev/} .start
+      mkvar $((end+1)) ${dev#/dev/} .end
+    fi
+  done < <( fdisk -lu -b 512 $basedev | tr '*' ' ' ) 
+  export $annotdev="slurped"
+}
+
+droploop() {
+  local dest loop err=0
+  lockfile -1 -r 3 /dev/shm/confinedrv-loops.lock || { 
+    err "error: could not lock /dev/shm/confinedrv-loops: will retry"
+    lockfile -1 -r 3 /dev/shm/confinedrv-loops.lock || { 
+      err "error: lock did not succeed; please execute somewhat later:"
+      echo " confinedrv --freeloop $1" >&2;
+      return 1;
+  };};
+  mv /dev/shm/confinedrv-loops /dev/shm/confinedrv-loops.tmp
+  while read dest loop; do 
+    #echo losetup -d $loop;
+    if [[ "$dest" = "$1" ]]; then
+      losetup -d $loop || { err=1;
+        echo "$dest $loop"; }
+    else
+      echo "$dest $loop"
+    fi
+  done </dev/shm/confinedrv-loops.tmp >/dev/shm/confinedrv-loops;
+  [[ err -ne 0 ]] && { err "error freeing loop device $1; please execute somewhat later:";
+	               echo " confinedrv --freeloop $1" >&2; }
+  rm -f /dev/shm/confinedrv-loops.tmp; rm -f /dev/shm/confinedrv-loops.lock
+  return $err;
+}
+
+verbose=1; readall=false; annotate=true; gapmode=0; mbrmode=1; ret=0;
 
 if [[ $# -le 0 ]]; then
   echo -e "$(basename "$0") --help/--license\n"
@@ -86,20 +138,25 @@ getdevno() {
   echo "${major%,}:$minor"
 }
 
+# /dev/zero can not be used because it is a character rather than a block device
+# zerodev="$(getdevno /dev/zeroblock 2>/dev/null)";
+# if [ -z "$zerodev" ]; then && { zerodev=1:5; mknod /dev/zero c 1 5; }
+
 initloops() { local partno=$1
 
-  [[ -z "$rolp" && verbose -gt 0 ]] && echo $'\e[;33mconfinedrv - visit us on www.elstel.org/qemu\e[0m' >&2;
+  [[ -n "$rolp" ]] && { err "internal error: ro-loopdev already initialized."; exit 244; }
+  [[ verbose -gt 0 ]] && echo $'\e[;33mconfinedrv - visit us on www.elstel.org/qemu\e[0m' >&2;
 
   mkdir -p /dev/shm/
-  #bdev=$(getdevno /dev/$org)
+  #bdev=$(getdevno $org)
   if [[ partno -gt 0 ]]; then
-    loop=$(losetup -f)
-    losetup $loop /dev/$org
+    loop=$(losetup -f) || { err "all loop devices in use (see --loopusage)."; exit 202; }
+    losetup $loop $org
   else loop="";
   fi
 
-  rolp=$(losetup -f)
-  losetup -r $rolp /dev/$org
+  rolp=$(losetup -f) || { [[ -n "$loop" ]] && losetup -d $loop; err "all loop devices in use (see --loopusage)."; exit 202; }
+  losetup -r $rolp $org
   blockdev --setro $rolp
   chmod gua-w $rolp >/dev/null 2>&1 
 
@@ -117,9 +174,10 @@ let PGspare=PGsize-1
 
 IssuePartRegion() { # access start end
   local access=$1 start=$2 end=$3 length; let length=end-start
-  [[ access -lt 0 ]] && return
+  [[ access -lt -1 ]] && return
   if [[ access -ge 2 ]]; then echo "$start $length linear $loop $start" >&8
   elif [[ access -eq 1 ]]; then echo "$start $length linear $rolp $start" >&8
+  elif [[ access -eq 0 ]]; then echo "$start $length zero" >&8
   else echo "$start $length error" >&8
   fi
 }
@@ -128,12 +186,12 @@ roundup() { echo  $(( ($1+PGspare) / PGsize * PGsize )); }
 rounddown() { echo  $(( ($1) / PGsize * PGsize )); }
 min() { if [[ $1 -le $2 ]]; then echo $1; else echo $2; fi }
 max() { if [[ $1 -ge $2 ]]; then echo $1; else echo $2; fi }
-acc2str() { if [[ $1 -ge 2 ]]; then echo "rw"; elif [[ $1 -eq 1 ]]; then echo "r"; else echo "-"; fi }
+acc2str() { if [[ $1 -ge 2 ]]; then echo "rw"; elif [[ $1 -eq 1 ]]; then echo "r"; elif [[ $1 -eq 0 ]]; then echo "0"; else echo "-"; fi }
 
 NotePartRegion() {
   local access=$1 start=$2 end=$3
   [[ start -le end ]] || return
-  [[ prevend -eq start ]] || { err "internal error in NotePartRegion ($prevstart-$prevend, $start-$end)"; exit 244; }
+  [[ prevend -eq start ]] || { err "internal error in NotePartRegion ($prevstart-$prevend, $start-$end+1)"; exit 244; }
   #echo "{$prevacc,$prevstart,$prevend}"
   #echo "<$access,$start,$end>"
   if [[ prevacc -eq access ]]; then let prevend=end+1; return
@@ -156,24 +214,36 @@ NoteExtendedPartition() {
 }
 
 skip() { local start=$1 extpos dstart;
+  [[ pos -le start ]] || { err "trying to skip backwards from $start back to $pos"; exit 244; }
   if [[ extstart -lt extend ]]; then
-    let extpos=$(min $(max $pos $extstart) $start);
-    let dstart=$(max $(min $start $extend) $extpos); # diminished start position
-    NotePartRegion 0 $pos $((extpos-1))
-    NotePartRegion 1 $extpos $((dstart-1))
-    NotePartRegion 0 $dstart $((start-1))
+    let extpos=$(min $(max $pos $extstart) $start);	# extpos ... what we have to skip from $pos until we reach the extended partition header or the $start of the partition $1 before
+    let dstart=$(max $(min $start $extend) $extpos);	# 'diminished start position' ... $start of partition inside extended partition or end of the extended partition, but not before $extpos
+    # also: let dstart=$(min $start $extend)  + never skip in backward direction: max $extpos (the following command will not condone it)
+    NotePartRegion $gapmode $pos $((extpos-1));	# ... skipping before extended partition
+    NotePartRegion 1 $extpos $((dstart-1));	# ... extended partition header, intermediate space in ext. part or whole ext. part. if it has no sub-partitions
+    NotePartRegion $gapmode $dstart $((start-1));	# ... skip for what comes after the extended partition
+    # if we wanted to verify that the previous commands should work under any condition:
+    #  $start is before extended partition: pos-extpos = pos-start: $gap,  extpos = start = dstart   =>   extpos-dstart: zerolen,  dstart-start: zerolen
+    #  $start is inside extended partition: extpos = max(pos,exstart), dstart = max(pos,start)   =>   pos-extpos: $gap,  extpos-dstart: readable,  dstart-start: zerolen
+    #  $start is after extended partition: extpos = max(pos,extstart), dstart = max(pos,extend)   =>  pos-extpos: $gap,  extpos-dstart: readable,  dstart-start: $gap
+    #  annot: $start is after extended partition and extended partition unmarked: before ext. part: $gap, rest of ext.part gets readable, then skips with $gap
+    #  annot: $start is after extended partition and extended partition already marked: extpos = dstart = end of ext.part: simply skipping with $gap
   else
-    NotePartRegion 0 $pos $((start-1))
+    NotePartRegion $gapmode $pos $((start-1))
   fi
 }
 
 while [[ $# -gt 0 ]]; do
 case "$1" in
-  --version) echo "confinedrv 1.2.1"; echo;;
+  --version) echo "confinedrv 1.7.1"; echo;;
   -h|--help) echo -e "confinedrv [--ra] sdx=sda1,2,3,4 sdy=sdb1,2,3,4"
-             echo -e "  --ra ... everything at least readable"
+             echo -e "confinedrv [--ra] sdx=sda:r1,2:w3:z4:e7 sdy=sdb:w3"
+             echo -e "  --ra ... everything at least readable; default is zeroing out."
+	     echo -e "  --mbr err/zero/ro/rw ... master partition table & boot record access rights (std:ro)"
+	     echo -e "  --gap err/zero/ro/rw ... access rights for gaps (std:zero)"
 	     echo -e "confinedrv -d/-r/--remove sdx sdy ...";
-	     echo -e "confinedrv -i/--info sdx sdy ..."
+	     echo -e "confinedrv [--noannot] -i/--info sdx sdy ... show annotated drive mapping table";
+	     echo -e "confinedrv --loopusage [sdx sdy] ... show all loop devices used for sdx.";
 	     echo -e "           -v/--verbose/-q/--quiet: show mapping table / do not show alignement warnings\n"
 	     ;;
   -d|-r|--remove) while [ -n "$2" ]; do
@@ -185,44 +255,119 @@ case "$1" in
 		  exit $ret;;
 
   -i|--info) while [ -n "$2" ]; do
-	       echo "*** $2 ***"
-	       dmsetup status $2; echo; shift;
+	       echo "*** $2 ***";
+	       while read winstart winlen mode dev devstart; do
+		 loopno="${dev#7:}"; 
+		 if [[ "$loopno" != "$dev" ]]; then
+		   devar="loop_$loopno_"; devident=${!devar};
+		   devar="loop_$loopno"; basedev=${!devar};
+		   if [[ -z "$devident" ]]; then
+		     read loopdev data basedev < <( losetup /dev/loop${loopno}; ); 
+		     basedev="${basedev#(}"; basedev="${basedev%)}";
+		     [[ -z "$basedev" ]] && basedev=/dev/loop$loopno
+		     isro="$(blockdev --getro /dev/loop$loopno)";
+		     if [[ $isro -eq 0 ]]; then devident="(${basedev}:rw)"; else devident="(${basedev}:ro)"; fi
+		     export $devar="$basedev"; export ${devar}_="$devident";
+		   fi
+		 else unset devident;
+		 fi
+		 if $annotate; then
+		   annotdev=$(awk '{ gsub(/[^A-Za-z0-9]/,"_"); print; }' <<<"$basedev");
+		   [ -z "${!annotdev}" ] && slurpdev $annotdev "$basedev"
+		   annotstart=${annotdev}_start_${winstart}; if [[ -n "${!annotstart}" ]]; then annotstart="${!annotstart}"; else 
+		     annotstart=${annotdev}_end_${winstart}; if [[ -n "${!annotstart}" ]]; then annotstart="${!annotstart}";
+		   else annotstart="$winstart"; fi; fi
+		   let winend=winstart+winlen
+		   annotend=${annotdev}_end_${winend}; if [[ -n "${!annotend}" ]]; then annotend="${!annotend}"; else annotend="(+)$winlen"; fi
+		   if [[ winstart -eq devstart ]]; then echo -e "$annotstart\t$annotend   $mode\t$devident";
+		   else echo -e "$annotstart\t$annotend   $mode\t$devident\t$devstart"; fi
+		 else
+		   if [[ winstart -eq devstart ]]; then echo "$winstart $winlen $mode $devident";
+		   else echo "$winstart $winlen $mode $devident $devstart"; fi
+		 fi
+	       done < <( dmsetup table $2; ) 
+	       echo; shift;
 	     done;
 	     exit 0;;
 
+  --loopusage) if [ -e /dev/shm/ ]; then 
+		  if lockfile -1 -r 3 /dev/shm/confinedrv-loops.lock; then didlock=true; else didlock=false; err "error: could not lock /dev/shm/confinedrv-loops"; fi
+		  if [[ $# -le 1 ]];
+		  then cat /dev/shm/confinedrv-loops
+		  else shift; ( IFS="|"; egrep "$*" /dev/shm/confinedrv-loops; )
+		  fi
+		  $didlock && rm -f /dev/shm/confinedrv-loops.lock 
+               else echo "no loop devices in use by confinedrv." >&2; 
+	       fi; echo >&2; 
+	       exit 0;;
+
+  --freeloop) let ret=0; while [ -n "$2" ]; do droploop "$2" || let ret=1; shift; done; exit $ret;;
+
   --ra) readall=true; shift; continue; ;;
+  --gap) case "$2" in
+           zero|z|0) gapmode=0;; error|err|e) gapmode=-1;; read|ro|r|1) gapmode=1;; write|read-write|readwrite|w|rw|2) gapmode=2;;
+         esac; shift 2; continue;;
+  --mbr) case "$2" in
+           zero|z|0) mbrmode=0;; error|err|e) mbrmode=-1;; read|ro|r|1) mbrmode=1;; write|read-write|readwrite|w|rw|2) mbrmode=2;;
+         esac; shift 2; continue;;
   -v|--verbose) let verbose++; shift; continue; ;;
   -q|--quiet) let verbose--; shift; continue; ;;
+  --noannot) annotate=false; shift; continue; ;;
   --license) license;;
+  -*) err "unknown option $1"; echo >&2; exit 201;; 
   *)
 
 [[ $(id -u) -ne 0 ]] && { err "confinedrv must be run as root.";echo; exit 200; }
 
 read dest org <<<"${1/=/ }"
-read -a parts <<<"${org//,/ }"
-org=${parts[0]%%[0-9]*}
-parts[0]=${parts[0]#$org}; [[ -z "${parts[0]}" ]] && parts=();
-#parts=($(sort -g <<<"${parts[@]}";))
+read -a groups <<<"${org//:/ }"
+org=${groups[0]%%[0-9]*}; groups[0]=${groups[0]#$org};
+[[ -z "${groups[0]}" ]] && { let ng=${#groups[@]}; groups[0]="${groups[ng-1]}"; unset groups[ng-1]; }
+for group in "${groups[@]}"; do
+  if [[ "${group##[0-9]*}" != "$group" ]]; then
+    typ='w';
+  else typ="${group:0:1}"; group="${group:1}";
+  fi
+  ein "$typ" e z r w || { err "access rights for partitions must be one of r/w/z/e."; echo >&2; exit 201; }
+  targetvar=parts_$typ[0]; [[ -n "${!targetvar}" ]] && { err "error: already specified: $typ-access rights for $org ($group, ${!targetvar}, ... )."; echo >&2; exit 201; }
+  read -a parts_$typ <<<"${group//,/ }"
+  # parts=($(sort -g <<<"${parts[@]}";))
+  err=false
+  for p in ${group//,/ }; do
+    [[ -n "${p##[0-9]*}" ]] && { err=true; err "invalid partition number: $p.";echo >&2;  exit 201; }
+  done
+  $err && exit 201;
+done
+
+#echo "org - $org ${parts_e[@]}/${parts_z[@]}/${parts_r[@]}/${parts_w[@]}"
+#echo "${groups[@]}"
+#exit
+
+[[ -z "$org" ]] && { echo "usage: confinedrv newdevice=olddevice or newdevice=olddevice1,2,3 respectively (see --help)." >&2; echo >&2; exit 201; }
+[[ "${org#./}" = "${org#../}" ]] && { [ -e "/dev/$org" ] && org="/dev/$org"; }
+[ -e "$org" ] || { err "device $org not found."; echo >&2; exit 203; }
 
 # echo $dest#$org#${#parts[@]}
 # echo ${parts[@]}
 # echo ----------; exit
 
-initloops ${#parts[@]} 
+let partnum=${#parts_w[@]}+${#parts_r[@]}+${#parts_z[@]}+${#parts_e[@]}
+
+initloops ${#parts_w[@]}
 
 cleanup() {
   sleep 0.3; rm "$drvtable"; [[ -n "$rolp" ]] && losetup -d $rolp; unset rolp; [[ -n "$loop" ]] && losetup -d $loop; unset loop;
 }
 
-drvtable="$(mktemp)"; trap "cleanup" EXIT
-pos=0; prevacc=-1; prevstart=-1; prevend=0; extstart=-1; extend=-2; extwritable=false; found=0; maxdno=0;  #max=0;
+drvtable="$(mktemp confinedrv-XXXX-XXXX.drvtable)"; trap "cleanup" EXIT
+pos=0; prevacc=-2; prevstart=-1; prevend=0; extstart=-1; extend=-2; extwritable=false; found=0; maxdno=0;  #max=0;
 {
 while read dev start end blocks id type; do
-  dno="${dev#/dev/$org}";
+  dno="${dev#$org}";
   if [ "$dev" != "$dno" ]; then 
     [[ dno -gt maxdno ]] && let maxdno=dno
     if [[ pos -eq 0 ]]; then
-      NotePartRegion 1 0 $start
+      NotePartRegion $mbrmode 0 $start
       let pos=start prevend=start
     fi
     #echo "$dev $pos $start" >&2
@@ -233,9 +378,27 @@ while read dev start end blocks id type; do
     if $extwritable && [[ extstart -le start && end -lt extend ]];
       then continue; fi
 
-    if ein $dno "${parts[@]}"; then
+    if ein $dno "${parts_w[@]}"; then
       skip $start
       NotePartRegion 2 $start $end
+      let pos=end+1; let found++;
+      $isext && { extwritable=true; NoteExtendedPartition $start $end; }
+
+    elif ein $dno "${parts_r[@]}"; then
+      skip $start
+      NotePartRegion 1 $start $end
+      let pos=end+1; let found++;
+      $isext && { extwritable=true; NoteExtendedPartition $start $end; }
+
+    elif ein $dno "${parts_z[@]}"; then
+      skip $start
+      NotePartRegion 0 $start $end
+      let pos=end+1; let found++;
+      $isext && { extwritable=true; NoteExtendedPartition $start $end; }
+
+    elif ein $dno "${parts_e[@]}"; then
+      skip $start
+      NotePartRegion -1 $start $end
       let pos=end+1; let found++;
       $isext && { extwritable=true; NoteExtendedPartition $start $end; }
 
@@ -256,8 +419,8 @@ while read dev start end blocks id type; do
     #[[ max -lt end ]] && let max=end
     #[[ min -gt start ]] && let min=start
   fi
-done < <( fdisk -lu -b 512 /dev/$org | tr '*' ' ' | sort -g -k 2 -s; ) 
-max=$(blockdev --getsz /dev/$org)
+done < <( fdisk -lu -b 512 $org | tr '*' ' ' | sort -g -k 2 -s; ) 
+max=$(blockdev --getsz $org)
 skip $max
 virtualdiskend=$(roundup $prevend)
 IssuePartRegion $prevacc $prevstart $virtualdiskend
@@ -271,17 +434,28 @@ if [[ maxdno -ge 5 && extpend -lt 0 ]]; then
   echo >&2;
 fi
 
+prn_drvtable() {
+  while read winstart winend mode dev devstart; do
+    if [ "$dev" = "$loop" ]; then dev="(${org#/dev/}:rw)"
+    elif [ "$dev" = "$rolp" ]; then dev="(${org#/dev/}:ro)"
+    fi
+    if [[ winstart -eq devstart ]]; then echo "$winstart $winend $mode $dev";
+    else echo "$winstart $winend $mode $dev $devstart"; fi
+  done <"$drvtable"
+}
+
 if [[ verbose -gt 1 ]]; then
   msg "hdd mapping table:"
-  cat "$drvtable"
+  prn_drvtable
   echo
 fi
 
-if [ "$found" -ne "${#parts[@]}" ]; then
-  err "overlapping partitions specified or";  # can detect this only in cases where partitions become fully overlapped
-  err "no such partition on disk."
+
+if [[ found -ne partnum ]]; then
+  err "overlapping partitions specified (extended partition and partition inside extended partition) or";  
+  err "no such partition on disk." # can detect overlapping partitions only in cases where partitions become fully overlapped
   msg "$found out of ${#parts[@]} partitions processed.\n"
-  cat "$drvtable"
+  [[ verbose -le 1 ]] && { prn_drvtable; echo >&2; }
   cleanup
   trap '' EXIT
   ret=207
@@ -300,11 +474,14 @@ else
  ret=$?
  #if [ $? -eq 0 ]; then rm "$drvtable"; else echo "please remove $drvtable manually!"; fi
  if [ $ret -ne 0 ]; then
+   cat $drvtable
    cleanup
  else
    rm "$drvtable"
+   lockfile -1 -r 3 /dev/shm/confinedrv-loops.lock || err "error locking /dev/shm/confinedrv-loops."
    [ -n "$loop" ] && echo "$dest $loop" >>/dev/shm/confinedrv-loops
    echo "$dest $rolp" >>/dev/shm/confinedrv-loops
+   rm -f /dev/shm/confinedrv-loops.lock
  fi
  trap '' EXIT
  echo
