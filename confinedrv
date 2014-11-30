@@ -1,10 +1,14 @@
 #!/bin/bash
 #
-# confinedrv v1.2.1
-# (c) copyright by Elmar Stellnberger, the original author: 2009, Jan 2010
+# confinedrv v1.7.2
+# (c) copyright by Elmar Stellnberger, the original author: 2009, Jan 2010, Nov&Dez 2014
 #
 #  further information: www.elstel.org/com; look here for an actual contact address
 #  current email: estellnb@elstel.org; additional email estellnb@gmail.com
+#
+# v 1.7.2: gpt support (30.11.2014)
+#  * use of parted instead of fdisk
+#  * small changes: prettier printing, loopusage handled before first call to confinedrv, error swallowed by bash 4.2.37 discovered: org=${groups[0]%%[0-9,]*}: colon was forgotten
 #
 # v 1.7.1: small fixups (16.11.2014)
 #  * a problem in theory: eliminated race condition dropping loop devices, cleanup by --freeloop after kill -9
@@ -91,13 +95,13 @@ mkvar() { local rndup=$(roundup $1); local rnddwn=$(rounddown $1);
 
 slurpdev() { local annotdev basedev; annotdev="$1"; basedev="$2";
   msg "slurping $basedev"
-  while read dev start end blocks id type; do
-    dno="${dev#$basedev}";
-    if [ "$dev" != "$dno" ]; then 
+  while read dno start end blocks id type; do
+    if [[ -z "${dno##[0-9]*}" && -n "$dno$start$end" ]]; then 
+      start="${start%s}"; end="${end%s}"; dev="${basedev}${dno}";
       mkvar $start ${dev#/dev/} .start
       mkvar $((end+1)) ${dev#/dev/} .end
     fi
-  done < <( fdisk -lu -b 512 $basedev | tr '*' ' ' ) 
+  done < <( parted $basedev <<<$'unit s\nprint\nquit\n' ) 
   export $annotdev="slurped"
 }
 
@@ -218,7 +222,7 @@ skip() { local start=$1 extpos dstart;
   if [[ extstart -lt extend ]]; then
     let extpos=$(min $(max $pos $extstart) $start);	# extpos ... what we have to skip from $pos until we reach the extended partition header or the $start of the partition $1 before
     let dstart=$(max $(min $start $extend) $extpos);	# 'diminished start position' ... $start of partition inside extended partition or end of the extended partition, but not before $extpos
-    # also: let dstart=$(min $start $extend)  + never skip in backward direction: max $extpos (the following command will not condone it)
+    # also: let dstart=$(min $start $extend)  + never skip in backward direction: max $extpos (the following command will not condone it; relevant iff $1=$start after $extend)
     NotePartRegion $gapmode $pos $((extpos-1));	# ... skipping before extended partition
     NotePartRegion 1 $extpos $((dstart-1));	# ... extended partition header, intermediate space in ext. part or whole ext. part. if it has no sub-partitions
     NotePartRegion $gapmode $dstart $((start-1));	# ... skip for what comes after the extended partition
@@ -235,7 +239,7 @@ skip() { local start=$1 extpos dstart;
 
 while [[ $# -gt 0 ]]; do
 case "$1" in
-  --version) echo "confinedrv 1.7.1"; echo;;
+  --version) echo "confinedrv 1.7.2"; echo;;
   -h|--help) echo -e "confinedrv [--ra] sdx=sda1,2,3,4 sdy=sdb1,2,3,4"
              echo -e "confinedrv [--ra] sdx=sda:r1,2:w3:z4:e7 sdy=sdb:w3"
              echo -e "  --ra ... everything at least readable; default is zeroing out."
@@ -278,7 +282,9 @@ case "$1" in
 		     annotstart=${annotdev}_end_${winstart}; if [[ -n "${!annotstart}" ]]; then annotstart="${!annotstart}";
 		   else annotstart="$winstart"; fi; fi
 		   let winend=winstart+winlen
-		   annotend=${annotdev}_end_${winend}; if [[ -n "${!annotend}" ]]; then annotend="${!annotend}"; else annotend="(+)$winlen"; fi
+		   annotend=${annotdev}_end_${winend}; if [[ -n "${!annotend}" ]]; then annotend="${!annotend}"; else
+		   annotend=${annotdev}_start_${winend}; if [[ -n "${!annotend}" && winlen -gt 2048 ]]; then annotend="${!annotend}"; 
+		   else annotend="(+)$winlen"; fi; fi
 		   if [[ winstart -eq devstart ]]; then echo -e "$annotstart\t$annotend   $mode\t$devident";
 		   else echo -e "$annotstart\t$annotend   $mode\t$devident\t$devstart"; fi
 		 else
@@ -290,7 +296,7 @@ case "$1" in
 	     done;
 	     exit 0;;
 
-  --loopusage) if [ -e /dev/shm/ ]; then 
+  --loopusage) if [ -e /dev/shm/confinedrv-loop.lock -o -e /dev/shm/confinedrv-loops ]; then 
 		  if lockfile -1 -r 3 /dev/shm/confinedrv-loops.lock; then didlock=true; else didlock=false; err "error: could not lock /dev/shm/confinedrv-loops"; fi
 		  if [[ $# -le 1 ]];
 		  then cat /dev/shm/confinedrv-loops
@@ -319,9 +325,12 @@ case "$1" in
 
 [[ $(id -u) -ne 0 ]] && { err "confinedrv must be run as root.";echo; exit 200; }
 
+#
+# sdx=sda4,5:r2,3:w4,5:e6:z7,8,9	# note: with bash 4.2.37: ${aa%%[0-9]*} yields the same as ${aa%%[0-9,]*} !! 
+#
 read dest org <<<"${1/=/ }"
 read -a groups <<<"${org//:/ }"
-org=${groups[0]%%[0-9]*}; groups[0]=${groups[0]#$org};
+org=${groups[0]%%[0-9,]*}; groups[0]=${groups[0]#$org};
 [[ -z "${groups[0]}" ]] && { let ng=${#groups[@]}; groups[0]="${groups[ng-1]}"; unset groups[ng-1]; }
 for group in "${groups[@]}"; do
   if [[ "${group##[0-9]*}" != "$group" ]]; then
@@ -334,7 +343,7 @@ for group in "${groups[@]}"; do
   # parts=($(sort -g <<<"${parts[@]}";))
   err=false
   for p in ${group//,/ }; do
-    [[ -n "${p##[0-9]*}" ]] && { err=true; err "invalid partition number: $p.";echo >&2;  exit 201; }
+    [[ -n "${p##[0-9]*}" ]] && { err=true; err "invalid partition number: $p.";echo >&2; }
   done
   $err && exit 201;
 done
@@ -360,20 +369,33 @@ cleanup() {
 }
 
 drvtable="$(mktemp confinedrv-XXXX-XXXX.drvtable)"; trap "cleanup" EXIT
-pos=0; prevacc=-2; prevstart=-1; prevend=0; extstart=-1; extend=-2; extwritable=false; found=0; maxdno=0;  #max=0;
+pos=0; prevacc=-2; prevstart=-1; prevend=0; extstart=-1; extend=-2; extwritable=false; parttbl=""; found=0; maxdno=0;  #max=0;
 {
-while read dev start end blocks id type; do
-  dno="${dev#$org}";
-  if [ "$dev" != "$dno" ]; then 
+while read dno start end blocks parttype fsandflags; do
+  if [[ -n "${dno##[0-9]*}" || -z "$dno$start$end$blocks$id$typeandflags" ]]; then 
+    if [[ "${dno,,}" = "partition" && "${start,,}" = "table:" ]]; then
+      parttbl="${end,,}";
+      ! ein "$parttbl" gpt msdos && warn "warning: confinedrv has never been tested with the $parttbl partition table type (assuming like gpt).";
+    fi
+    # upcase="${start^^} ${end^^} ${blocks^^} ${id^^} ${type^^}"; 
+    # if [ "${upcase##*GPT}" != "${upcase}" ]; then isgpt=true; warn "warning: program was not sufficiently tested with gpt disks.";
+    # elif [ "${upcase#WARN}" != "$upcase" ]; then warn "fdisk -lu: $start $end $blocks $id $type"
+    # fi
+  else
     [[ dno -gt maxdno ]] && let maxdno=dno
+    if [[ -z "$parttbl" ]]; then warn "warning: parted did not seem to list the type of partition table: assuming msdos."; parttbl="msdos"; fi
+    start="${start%s}"; end="${end%s}"; type="${parttype,,}"; # echo "$start $end $type";
+
     if [[ pos -eq 0 ]]; then
       NotePartRegion $mbrmode 0 $start
       let pos=start prevend=start
     fi
     #echo "$dev $pos $start" >&2
 
-    if [[ "${type#*Erw}" != "$type" || "${type#*Ext}" != "$type"  ]]; 
-      then isext=true; else isext=false; fi
+    if [[ "${type#*erweitert}" != "$type" || "${type#*extended}" != "$type"  ]]; 
+      then isext=true; [[ "$parttbl" != "msdos" ]] && { err "error: extended partitions only supported with dos partition tables."; exit 208; }
+      else isext=false; 
+      fi
 
     if $extwritable && [[ extstart -le start && end -lt extend ]];
       then continue; fi
@@ -419,18 +441,24 @@ while read dev start end blocks id type; do
     #[[ max -lt end ]] && let max=end
     #[[ min -gt start ]] && let min=start
   fi
-done < <( fdisk -lu -b 512 $org | tr '*' ' ' | sort -g -k 2 -s; ) 
+done < <( parted $org <<<$'unit s\nprint\nquit\n' | sort -g -k 2 -s; ) 
+# done < <( fdisk -lu -b 512 $org | tr '*' ' ' | sort -g -k 2 -s; ) 
 max=$(blockdev --getsz $org)
-skip $max
+if [[ "$parttbl" = "msdos" ]]; then
+  skip $max
+else
+  # alternative recovery partition table at the end
+  NotePartRegion $mbrmode $pos $(($max-1))
+fi
 virtualdiskend=$(roundup $prevend)
 IssuePartRegion $prevacc $prevstart $virtualdiskend
 
 } 8>"$drvtable"
 
-if [[ maxdno -ge 5 && extpend -lt 0 ]]; then
-  err "extended partitions found but no partition called '...Erw' or '...Ext' listed by fdisk -lu";
+if [[ maxdno -ge 5 && extpend -lt 0 ]] && [[ "$parttbl" = "msdos" ]]; then
+  err "extended partitions given as parameter but no extended partition called '...erweitert' or '...extended' found/listed by parted 'print'";
   echo "you may wish to correct the matching for the name of the exteneded partition in the sources" >&2;
-  err "mapping will not function for extended partition"
+  err "as this is used as msdos disk the mapping will not function for extended partitions."
   echo >&2;
 fi
 
