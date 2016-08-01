@@ -35,6 +35,10 @@ confinedrv \- limit the partitions of an existing drive to read-only, read-write
 .RB { --info | -i  }
 .IR sdx " [ " "sdy ..." " ] "
 .br
+.B confinedrv readout-mbr 
+.BI --from " sda"
+.BI --into " /boot/sda.mbr"
+.br
 .BI "confinedrv --version / --license / --help "
 .br
 
@@ -85,13 +89,18 @@ retrieve information about mapped drives: currently prints the mapping table
 .RI "\fB--loopusage\fR [ " "MAPPED_DRIVE ... " ]
 show all loop devices in use or all loop devices used by the given virtual drives
 .TP
+.B readout-mbr --from \fIsda \fB--into\fI /boot/sda.mbr\fR
+read out the disk space before the first partition from \fI/dev/sda\fR which includes the Master Boot Record and at least part of the partition table and save that to the file \fI/boot/sda.mbr\fR.
+.TP
 
 .SH EXAMPLES
 \fBconfinedrv --ra sdx=sda1,3 sdy=sda2,5,6,7\fP
 .br
-\fBconfinedrv sdy=sdb:r3:w5,6 sdy5=/media/esatahdd/partitionimages/sdb5.part \fP
+\fBconfinedrv --mbr rw sdy=sdb:r3:w5,6 mbr=/media/esatahdd/partitionimages/sdb-alternative.mbr \fP
 .br
-\fBconfinedrv -d sdx sdy\fP
+\fBconfinedrv sdz=sdb:r3:w5,6 sdz5=/media/esatahdd/partitionimages/sdb5.part \fP
+.br
+\fBconfinedrv -d sdx sdy sdz\fP
 .br
 
 .SH RETURN VALUES
@@ -104,6 +113,9 @@ show all loop devices in use or all loop devices used by the given virtual drive
    206 ~ could not free loop devices \fI(using --freeloop or -d/-r/--remove)\fR
    207 ~ overlapping partitions (extended partition and subpartition of extended partition) specified or partition does not exist
    208 ~ unsupported feature \fI(extended partition tables only suppported for disks with msdos partition tables)\fR
+   209 ~ \fI/dev/shm\fR mounted while confinedrv was first invoked without so that there are still residuals in \fI/tmp\fR which can not be auto-moved to \fI/dev/shm\fR.
+   210 ~ file already exists \fI(currently only returned by readout-mbr)\fR
+   211 ~ file or device not found \fI(currently only returned by readout-mbr)\fR
    222 ~ page size not divisible by 512
    223 ~ file size of partition image does not match size of the partition to be replaced
    244 ~ internal error
@@ -134,5 +146,9 @@ confinedrv has preliminary support for GPT partition tables since version 1.7.2 
 was invented, designed and programmed by Elmar Stellnberger <estellnb@elstel.org> (other emails: estellnb@gmail.com, estellnb@yahoo.de).
 
 .SH LICENSE
-This program may be used and modified for free. Whenever publishing or sending your changes to other people please adhere to the C-FSL license as given by an confinedrv --license. This program has been designed as research work and comes completely without any warranty.
-
+This program may be used under the terms of GPLv3; see: https://www.gnu.org/licenses/gpl-3.0.en.html.
+.br
+If you apply changes please sign our contributor license agreement at https://www.elstel.org/license/CLA-elstel.pdf so that your changes can be included into the main trunk at www.elstel.org/qemu/
+.br
+(c) copyright by Elmar Stellnberger 2016
+ 

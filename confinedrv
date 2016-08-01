@@ -1,10 +1,15 @@
 #!/bin/bash
 #
-# confinedrv v1.7.6
-# (c) copyright by Elmar Stellnberger, the original author: 2009, Jan 2010, Nov&Dez 2014
+# confinedrv v1.7.7
+# (c) copyright by Elmar Stellnberger, the original author: 2009, Jan 2010, Nov&Dez 2014, Aug 2016
 #
 #  further information: www.elstel.org/com; look here for an actual contact address
 #  current email: estellnb@elstel.org; additional email estellnb@gmail.com
+#
+# v 1.7.7: allow to fade in a file for the mbr: sdy=sdb5,6 mbr=./sdb.mbr
+#  * use lockfile-progs in order to lock the $shm/confinedrv-loops file (lockfile-create) or use the old lockfile-executable as fallback which is still distributed with some distros
+#  * use /tmp if /dev/shm should not be accessible/mounted (and allow the user to mount /dev/shm later)
+#  * some smaller fixes like f.i. touching the $shm/confinedrv-loops for the first time in order to avoid an unnecessary error message
 #
 # v 1.7.6: use of external partition images (06.12.2014)
 #  * allows sth. like confinedrv sdy=sdb5,6 sdy5=/media/partitionimages/sdb5.img
@@ -51,34 +56,12 @@
 #
 
 license() {
-  echo -e "\e[1mThis program may be used under the terms of C-FSL v1.0:\e[0m"; echo
   cat <<EOQ
-CONVERTIBLE FREE SOFTWARE LICENSE
-	Version 1.0, 2016-08-10
-copyright 2016, by Elmar Stellnberger
-Everyone is permitted to copy and distribute verbatim copies of this license document. You must not modify the license itself.
-This license applies to any software containing a notice by the copyright holder saying that it may be used under the terms of the Convertible Free Software License. If a specific version number is mentioned then usage rights include this version as well as any newer version which will always be similar in spirit to this license. The term Convertible Free Software license may be abbreviated as C-FSL.
-
-1. Any work under this license comes completely without any warranty or any kind of liability such as lost revenues, profits, harm or damage of any kind even if the authors should have been advised of the possibility of such harm or damage. It may be seen as research work and does not claim for fitness to any particular usage purpose.
-
-2. The term 'source code' applies to the preferred form that is used to develop or apply changes to a work under this license referred to herein as 'the work'. You are allowed to modify or change the source code if you accept that the resulting changed work will become subject to this license. As soon as you apply any change this is an implicit consent to fully comply with this license and a consent that the work may be used under this license. 
-
-3. It is your obligation that the changed version of your sources will be available to the public for free within the time frame of a month at least if there is no undue hindrance by the authors to make it available. Modifications which result in a broken or unusable program which the authors do not plan to continue their work on are considered dead end and do not need to be published. Available for free means that there will be no undue hindrance in obtaining the given item like a registration of the person who wants to download or obtain the given item. Available for free also means that you must not charge for the given item itself apart from the possibility to require a reasonable charge for the physical reproduction of the data.
-
-4. You are allowed to issue an 'automatic derivation process' on the source code which will result in so called 'object code'. You are obligated to provide sufficient data, tools and utilities so that a functionally equivalent object code can be compiled merely from programs and work licensed either under any open source license approved by opensource.org or under C-FSL. The given data and utilities for obtaining functionally equivalent results need to be available to the public for free.
-
-5. When applying changes to the source code you need to leave your name, your email address and the date of your modifications so that other people may contact you. If a contributor should not have a steady access to the internet or a satisfying access to an emailing service he may leave another way by which he can be contacted. We suggest to list all changes by contributors either in a separate changelog file or in the header of the changed file. Several consecutive changes may be collapsed. Furthermore you need to give your changed version a 'marker' which may be used to distinguish it from the upstream version when being distributed to other people. The distributed product needs to be of the form upstream name - dash upstream version - dash your marker optionally followed by a version number under your control. If there should be a chain of upstream contributors there only needs to be one marker by the party which is at the end of the chain as long as that chain remains to be documented in some place where it is shipped with your software. The marker needs to be unique, at least two letters in size. We suggest it to reflect the name of your company or distribution.
-
-6. You may choose to create a fork of a work under C-FSL by giving it a completely different name. However you need to assert that people will know that your fork is based on the original work. If your program has a graphical user interface the whole C-FSL license must be referenced via the GUI. Otherwise a plain text copy of this license needs to be given and packed alongside the distributed product. A complete reference to the base product including email address and web presence must be referenced via the GUI for any GUI program that is a fork of another C-FSL program. If your program has a comprehensive help, manual or info page and is a fork a similar reference to the base product must be given there. It does not apply to quick or short command line help output as long as a more comprehensive help page is also available. Any program under C-FSL which is a fork of another C-FSL program must ship with a reference to the base product. 
-
-7. Contributing to a work under C-FSL means that you will give a group called the 'original authors' a consensus based right to re-license your derived work so that it will be available under both licenses: the C-FSL and the newly applied license. In order to re-license consensus is only required between these original authors. The original authors are the group of people who have initially started to create a work. They shall be mentioned at the beginning of the changelog or the file header of changes. As soon as there is a consensus to do so by all original authors the work may either be re-licensed, published as upstream version without a marker or new people may be accepted and mentioned as 'original authors'. 
-
-8. No work under C-FSL shall be deemed part of an effective measure under anti-circumvention laws like under article 11 of the WIPO copyright treaty adopted on 1996-12-20 or any similar law. By your consent to work under this license you waive any legal power to forbid such circumventions regarding the work under C-FSL or any work combined with it. You must assert that the right to use, modify, generate object code and distribute any software under C-FSL will not be infringed by patent claims or similar law. If you modify a work under C-FSL so that it will knowingly rely on a patent license then it means that you will thereby grant to extend the patent license to any recipient of the work. Every contributor grants by the act of contributing to a work under C-FSL a non-exclusive, worldwide and royalty-free patent license to any prospective contributor or user of the given work applicable to all his 'essential patent claims'. The essential patent claims comprise all claims owned or controlled by the contributor.
-
-9. A work under C-FSL which has another component or plug-in as well as a work under C-FSL which is used itself as a component, plug-in, add-on of another product, any product under C-FSL which is combined or which links against another work requires that the other work will either be put under an open source license as approved by opensource.org or it needs to be put under C-FSL as well. Usage of proprietary libraries and kernel modules pose an exception to this rule. There must be a functionally equivalent open source library for any proprietary library so that a work under C-FSL can run and execute even without any proprietary library. No such restriction applies to kernel modules. The term 'kernel' refers to the core of an operating system. Libraries are separate components which link against the given work or other components. The term 'linking' refers to the relocation of references or addresses when the library is combined with another component in order to make the combined aggregate executable or runnable. Such references are bound to symbols which are part of the common interface between the library and the component which the library is combined with at runtime. Libraries which provide operating system services use a well defined binary interface but do not 'link' against the kernel.
-
-10. This license is either governed by the Laws of Austria or by the laws of the country where the first mentioned original author lives or is a resident. Disputes shall be settled by the nearest proper court given the home town or location of the first original author unless there is a common consensus for another place of court by all original authors. If any of the terms stated in this license were not in accordance with the law of the country that governs this license all other parts of the license shall remain valid.
-
+This program may be used under the terms of GPLv3; see: https://www.gnu.org/licenses/gpl-3.0.en.html.
+If you apply changes please sign our contributor license agreement at https://www.elstel.org/license/CLA-elstel.pdf
+so that your changes can be included into the main trunk at www.elstel.org/qemu/
+(c) copyright by Elmar Stellnberger 2016
+ 
 EOQ
   exit 0;
 }
@@ -93,6 +76,80 @@ ein() { local tok="$1";
   return 1;
 }
 
+exec 9>/dev/null;
+if which lockfile-create 2>&9 >&9; then
+  let lockprog=1;
+elif which lockfile 2>&9 >&9; then
+  let lockprog=2;
+else
+  err "error: package lockfile-progs containing the lockfile-create/-remove utility programs is not installed.";
+  let lockprog=0;
+fi
+
+check4parted() {
+  which parted 2>&9 >&9 || { err "parted does not seem to be installed; exiting."; echo >&2; exit 208; }
+}
+
+mylockfile-create() {
+  [[ -n "$2" ]] && { err "internal error: wrong invocation of mylockfile-create."; exit 244; }
+  if [[ lockprog -eq 2 ]]; then
+    lockfile -1 -r 3 "$1";
+    return $?;
+  elif [[ lockprog -eq 0 ]]; then   #  unsafe because of race-condition! - user has already been warned.
+    for retries in 1 2 3; do
+      [[ -e "$1" ]] || { touch "$1"; return 0; }
+      sleep 1;
+    done;
+    [[ -e "$1" ]] && return 4;
+    touch "$1"; return 0;
+  fi
+  for retries in 1 2 3; do   # good; no race condition
+    lockfile-create --retry 0 --lock-name "$1" 2>&9 && return 0;
+    sleep 1;
+  done;
+  lockfile-create --retry 0 --lock-name "$1" 2>&9 && return 0;
+  return 4;
+}
+
+mylockfile-remove() {
+  if [[ lockprog -eq 1 ]]; then
+    lockfile-remove --lock-name "$1";     # does not delete the lock file (an optimization) at least while the machine is booted 
+    return;                   # ... but successfully releases the lock
+  fi
+  if [[ $(stat -c%s "$1") -ge 32 ]]; then     # also: find "$1" -printf "%s"
+    err "warning: lockfile $1 has a size greater than 32 bytes; please remove it manually after having a look!"; 
+    [[ lockprog -eq 1 ]] && lockfile-remove --lock-name "$1";   # never executed unless somebody would remove the code in front
+  else
+    rm -f "$1";
+  fi
+}
+
+if [[ -d "/dev/shm" ]]; then
+  # gonna have to check first whether there are residuals in /tmp from the time of before of shm has been mounted
+  #  first wait until /tmp/confinedrv-loops gets unmounted; i.e. there is no confinedrv-loops.lock file in /tmp
+  let lockexists=255;  # 255 ~ error / lock does not exist
+  for i in 0 1 2 3; do
+    if [[ lockprog -eq 1 ]]; then
+      lockfile-check --lock-name /tmp/confinedrv-loops.lock; let lockexists=$?;
+    else [[ -e /tmp/confinedrv-loops.lock ]]; let lockexists=$?;
+    fi
+    [[ $lockexists -eq 0 ]] || break;
+    [[ i -ne 3 ]] && sleep 1;
+  done
+  [[ lockexists -eq 0 ]] && { err "/dev/shm mounted but old lockfile still present in /tmp/confinedrv-loops.lock; please delete it first."; exit 209; }
+  # then try to migrate the confinedrv-loops file from /tmp to /dev/shm
+  if [[ -e "/tmp/confinedrv-loops" ]]; then
+    mylockfile-create /dev/shm/confinedrv-loops.lock
+    [[ -e "/dev/shm/confinedrv-loops" ]] && { err "tmp->shm migration error: [/tmp&/dev/shm]/confinedrv-loops: both files exist at the same time."; exit 209; }
+    mv --no-clobber /tmp/confinedrv-loops /dev/shm/confinedrv-loops
+    mylockfile-remove /dev/shm/confinedrv-loops.lock
+  fi
+  # now we can be sure that it is safe to use /dev/shm
+  shm="/dev/shm";
+else
+  shm="/tmp";
+fi
+
 mkvar() { local rndup=$(roundup $1); local rnddwn=$(rounddown $1);
   [[ -z "$annotdev" ]] && { err "localvars;"; exit; }
   if [[ $rndup = $rnddwn ]]; then
@@ -106,7 +163,9 @@ mkvar() { local rndup=$(roundup $1); local rnddwn=$(rounddown $1);
 slurpdev() { local annotdev basedev; annotdev="$1"; basedev="$2";
   msg "slurping $basedev"
   while read dno start end blocks id type; do
-    if [[ -z "${dno##[0-9]*}" && -n "$dno$start$end" ]]; then 
+    if [[ "${dno,,}" = "disk" && "${start%:}" != "$start" ]]; then
+      endofdisk=${end%s}; [[ "$endofdisk" != "$end" ]] && export ${annotdev}_endofdisk=$endofdisk;
+    elif [[ -z "${dno##[0-9]*}" && -n "$dno$start$end" ]]; then 
       start="${start%s}"; end="${end%s}"; dev="${basedev}${dno}";
       mkvar $start ${dev#/dev/} .start
       mkvar $((end+1)) ${dev#/dev/} .end
@@ -118,15 +177,16 @@ slurpdev() { local annotdev basedev; annotdev="$1"; basedev="$2";
 droploop() {
   local dest target loop origin access offset loopusage loopusage_origin loopusage_access loopusage_offset err=0 
   target="$1"; shift;
-  lockfile -1 -r 3 /dev/shm/confinedrv-loops.lock || { 
-    err "error: could not lock /dev/shm/confinedrv-loops: will retry"
-    lockfile -1 -r 3 /dev/shm/confinedrv-loops.lock || { 
+  mylockfile-create $shm/confinedrv-loops.lock || { 
+    err "error: could not lock [/dev/shm|/tmp]/confinedrv-loops: will retry"
+    mylockfile-create $shm/confinedrv-loops.lock || { 
       err "error: lock did not succeed; please execute only once but somewhat later:"
       echo " confinedrv --freeloop $target" >&2;
       return 1;
   };};
-  trap '' SIGQUIT; declare -a loopusage loopusage_origin loopusage_access loopusage_offset 
-  mv /dev/shm/confinedrv-loops /dev/shm/confinedrv-loops.tmp
+  trap '' SIGQUIT SIGTERM SIGINT; declare -a loopusage loopusage_origin loopusage_access loopusage_offset 
+  touch $shm/confinedrv-loops; 
+  mv $shm/confinedrv-loops $shm/confinedrv-loops.tmp
   while read dest loop origin access offset; do 
     [[ -z "$dest" || -z "$loop" ]] && continue;
     #echo losetup -d $loop;
@@ -134,7 +194,7 @@ droploop() {
     if [[ "$dest" = "$target" ]] ; then
       if [[ -z "${loopno##[0-9]*}" ]]; then
 	if [[ -n "${loopuasge[loopno]}" && ( "${loopusage_origin[loopno]}" != "$origin" || "${loopusage_access[loopno]}" != "$access" || "${loopusage_offset[loopno]}" != "$offset" ) ]];then
-	  warn "inconsistant entries for $dest /dev/loop$loopno in /dev/shm/confinedrv-loops: ignoring any but the last one.";
+	  warn "inconsistant entries for $dest /dev/loop$loopno in $shm/confinedrv-loops: ignoring any but the last one.";
 	  echo ">> $dest /dev/loop$loopno ${loopusage_origin[loopno]} ${loopusage_access[loopno]} ${loopusage_offset[loopno]}" >&2;
 	  echo ">> $dest $loop $origin $access $offset" >&2;
 	fi
@@ -151,18 +211,18 @@ droploop() {
       fi
       echo "$dest $loop $origin $access $offset"
     fi
-  done </dev/shm/confinedrv-loops.tmp >/dev/shm/confinedrv-loops;
+  done <$shm/confinedrv-loops.tmp >$shm/confinedrv-loops;
   #echo "loopusage: ${!loopusage[*]} ~ ${loopusage[@]}" >&2;
   for loopno in ${!loopusage[*]}; do
     if [[ loopusage[loopno] -le 0 ]]; then
       losetup -d /dev/loop$loopno || { err=1; err "error trying to deallocate /dev/loop$loopno.";
         echo "$target /dev/loop$loopno ${loopusage_origin[loopno]} ${loopusage_access[loopno]} ${loopusage_offset[loopno]}"; }
     fi
-  done >>/dev/shm/confinedrv-loops;
+  done >>$shm/confinedrv-loops;
   [[ err -ne 0 ]] && { err "error freeing loop devices for $target; please execute somewhat later:";
 	               echo " confinedrv --freeloop $target" >&2; }
-  rm -f /dev/shm/confinedrv-loops.tmp; rm -f /dev/shm/confinedrv-loops.lock
-  trap - SIGQUIT
+  rm -f $shm/confinedrv-loops.tmp; mylockfile-remove $shm/confinedrv-loops.lock
+  trap - SIGQUIT SIGTERM SIGINT;
   return $err;
 }
 
@@ -184,26 +244,28 @@ getdevno() {
 
 getloops() {
   local destination loopdev origin access;
-  lockfile -1 -r 3 /dev/shm/confinedrv-loops.lock || err "possible inconsistency reading /dev/shm/confinedrv-loops: could not lock (timeout)."
-  trap 'rm -f /dev/shm/confinedrv-loops.lock' SIGQUIT
+  mylockfile-create $shm/confinedrv-loops.lock || err "possible inconsistency reading [/dev/shm|/tmp]/confinedrv-loops: could not lock (timeout)."
+  trap "mylockfile-remove $shm/confinedrv-loops.lock" EXIT
+  touch $shm/confinedrv-loops
   while read destination loopdev origin access offset; do
     if [[ "$origin" = "$org" && offset -eq 0 ]]; then 
       if [[ "$access" = "rw" ]]; then 
-	[[ -n "$loop" && "$loop" != "$loopdev" ]] && warn "double allocation in /dev/shm/confinedrv-loops: $org:ro ~ $loop $loopdev"
+	[[ -n "$loop" && "$loop" != "$loopdev" ]] && warn "double allocation in [/dev/shm|/tmp]/confinedrv-loops: $org:ro ~ $loop $loopdev"
 	export loop="$loopdev"; 
       elif [[ "$access" = "ro" ]]; then 
-	[[ -n "$rolp" && "$rolp" != "$loopdev" ]] && warn "double allocation in /dev/shm/confinedrv-loops: $org:rw ~ $rolp $loopdev"
+	[[ -n "$rolp" && "$rolp" != "$loopdev" ]] && warn "double allocation in [/dev/shm|/tmp]/confinedrv-loops: $org:rw ~ $rolp $loopdev"
 	export rolp="$loopdev"; 
       fi
     fi
     for srcno in ${!partsrc[@]}; do
       if [[ "$origin" = "${partsrc[srcno]}" && "$access" = "${partaccess[srcno]}" && offset -eq ${partoffset[srcno]} ]]; then
+	[[ -n "${partloop[srcno]}" && "${partloop[srcno]}" != "$loopdev" ]] && warn "double allocation in [/dev/shm|/tmp]/confinedrv-loops: ${partsrc[srcno]}:${pasrtaccess[srcno]} ~ ${partloop[srcno]} $loopdev"
 	partloop[srcno]=$loopdev
       fi
     done
-  done </dev/shm/confinedrv-loops;
-  rm -f /dev/shm/confinedrv-loops.lock
-  trap - SIGQUIT
+  done <$shm/confinedrv-loops;
+  mylockfile-remove $shm/confinedrv-loops.lock
+  trap - EXIT
   [[ verbose -gt 1 ]] && echo "loop devices found: $loop $rolp" >&2
 }
 
@@ -213,7 +275,7 @@ initloops() { local partno=$1;
 
   getloops "$org";  # gets $rolp and $loop
 
-  mkdir -p /dev/shm/
+  mkdir -p $shm
   if [[ partno -gt 0 ]]; then
     # loop=$(getoneloop "$org" rw)
     if [[ -z "$loop" ]]; then
@@ -228,7 +290,7 @@ initloops() { local partno=$1;
     transient_rolp=$(losetup -f) || { [[ -n "$transient_loop" ]] && losetup -d $transient_loop; err "all loop devices in use (see --loopusage)."; exit 202; }
     losetup -r $transient_rolp $org
     blockdev --setro $transient_rolp
-    chmod gua-w $transient_rolp >/dev/null 2>&1 
+    chmod gua-w $transient_rolp >&9 2>&1 
   fi
 
   let thiserr=0;
@@ -250,7 +312,7 @@ initloops() { local partno=$1;
 	elif [[ "$thisaccess" = "ro" ]]; then
 	  losetup -r --offset ${partoffset[srcno]} $thisloop ${partsrc[srcno]}
 	  blockdev --setro $thisloop
-	  chmod gua-w $thisloop >/dev/null 2>&1
+	  chmod gua-w $thisloop >&9 2>&1
 	else err "unknown access rights for external partition image: $dest$srcno=${partsrc[srcno]}:$thisaccess."; unset parttransloop[srcno]; thiserr=244;
 	fi
       fi
@@ -268,8 +330,8 @@ initloops() { local partno=$1;
     reloading=yes
   fi
 
-  lockfile -1 -r 3 /dev/shm/confinedrv-loops.lock || err "error locking /dev/shm/confinedrv-loops."
-  trap '' SIGQUIT;    # ignore signal
+  mylockfile-create $shm/confinedrv-loops.lock || err "error locking [/dev/shm|/tmp]/confinedrv-loops."
+  trap '' SIGQUIT SIGINT SIGTERM;    # ignore signal
   : ${rolp:="$transient_rolp"} ${loop:="$transient_loop"};
   { [ -n "$loop" ] && echo "$dest $loop $org rw 0";
                       echo "$dest $rolp $org ro 0"; 
@@ -279,9 +341,9 @@ initloops() { local partno=$1;
       echo "$dest ${partloop[srcno]} ${partsrc[srcno]} ${partaccess[srcno]} ${partoffset[srcno]}";
       unset parttransloop[srcno];
     done
-  } >>/dev/shm/confinedrv-loops
-  rm -f /dev/shm/confinedrv-loops.lock
-  trap - SIGQUIT;
+  } >>$shm/confinedrv-loops
+  mylockfile-remove $shm/confinedrv-loops.lock
+  trap - SIGQUIT SIGINT SIGTERM;
   unset transient_rolp transient_loop
 
 }
@@ -293,11 +355,12 @@ PAGE_SIZE=$(getconf PAGE_SIZE)
 [[ PAGE_SIZE/512*512 -ne PAGE_SIZE ]] && { err "page size not divisable by 512; exiting."; exit 222; }
 let PGsize=PAGE_SIZE/512
 let PGspare=PGsize-1
+possible_page_sizes=(4096 8192 16384 32768 65536);
 
 IssuePartRegion() { # access start end
   local partno=$1 access=$2 start=$3 end=$4 length; let length=end-start
   [[ access -lt -1 ]] && return
-  if [[ partno -ge 1 ]]; then echo "$start $length linear ${partloop[partno]} 0" >&8
+  if [[ partno -ge 0 ]]; then echo "$start $length linear ${partloop[partno]} 0" >&8
   elif [[ access -ge 2 ]]; then echo "$start $length linear $loop $start" >&8
   elif [[ access -eq 1 ]]; then echo "$start $length linear $rolp $start" >&8
   elif [[ access -eq 0 ]]; then echo "$start $length zero" >&8
@@ -317,23 +380,23 @@ NotePartRegion() {
   [[ prevend -eq start ]] || { err "internal error in NotePartRegion ($prevstart-$prevend, $start-$end+1)"; exit 244; }
   #echo "{$prevacc,$prevstart,$prevend}"
   #echo "<$access,$start,$end>"
-  [[ -z "${partsrc[partno]}" ]] && partno=0
+  [[ partno -le -1 || -z "${partsrc[partno]}" ]] && partno=-1;   # partno indicates non-mirrored space from an external partition file
   if [[ prevacc -eq access && prevpartno -eq partno ]]; then let prevend=end+1; return
-  elif [[ prevacc -gt access || partno -ge 1 ]]; then
+  elif [[ prevacc -gt access || partno -ge 0 ]]; then
     let start=$(roundup prevend)
-    [[ partno -ge 1 && ${partoffset[partno]} != $(((start-prevend)*512)) ]] && { err "internal error: did offset ${partsrc[partno]} with ${partoffset[partno]} though an offset of $((start-prevend)) would have been required."; exit 244; }
-    if [[ prevpartno -ge 1 && start -ne prevend ]]; then
+    [[ partno -ge 0 && ${partoffset[partno]} != $(((start-prevend)*512)) ]] && { err "internal error: did offset ${partsrc[partno]} with ${partoffset[partno]} though an offset of $((start-prevend)) would have been required."; exit 244; }
+    if [[ prevpartno -ge 0 && start -ne prevend ]]; then
       let intermedstart=$(rounddown prevend)
       IssuePartRegion $prevpartno $prevacc $prevstart $intermedstart
-      IssuePartRegion 0 $prevacc $intermedstart $start
+      IssuePartRegion -1 $prevacc $intermedstart $start
     else
       IssuePartRegion $prevpartno $prevacc $prevstart $start
     fi
     [[ prevend -lt start && verbose -gt 1 ]] && warn "warning: access right extension $(acc2str $access)->$(acc2str $prevacc) $prevend..$((start-1))"
   else # prevacc -lt access
     let start=$(rounddown prevend)
-    [[ partno -le 0 ]] || { err "internal error at $LINENO."; exit 244; }
-    IssuePartRegion 0 $prevacc $prevstart $start
+    [[ partno -le -1 ]] || { err "internal error at $LINENO."; exit 244; }
+    IssuePartRegion -1 $prevacc $prevstart $start
     [[ start -lt prevend && verbose -gt 1 ]] && warn "warning: access right extension $(acc2str $prevacc)->$(acc2str $access) $start..$(($prevend-1))"
   fi
   let prevstart=start prevend=end+1 prevacc=access prevpartno=partno;
@@ -351,9 +414,9 @@ skip() { local start=$1 extpos dstart;
     let extpos=$(min $(max $pos $extstart) $start);	# extpos ... what we have to skip from $pos until we reach the extended partition header or the $start of the partition $1 before
     let dstart=$(max $(min $start $extend) $extpos);	# 'diminished start position' ... $start of partition inside extended partition or end of the extended partition, but not before $extpos
     # also: let dstart=$(min $start $extend)  + never skip in backward direction: max $extpos (the following command will not condone it; relevant iff $1=$start after $extend)
-    NotePartRegion 0 $gapmode $pos $((extpos-1));	# ... skipping before extended partition
-    NotePartRegion 0 1 $extpos $((dstart-1));	# ... extended partition header, intermediate space in ext. part or whole ext. part. if it has no sub-partitions
-    NotePartRegion 0 $gapmode $dstart $((start-1));	# ... skip for what comes after the extended partition
+    NotePartRegion -1 $gapmode $pos $((extpos-1));	# ... skipping before extended partition
+    NotePartRegion -1 1 $extpos $((dstart-1));	# ... extended partition header, intermediate space in ext. part or whole ext. part. if it has no sub-partitions
+    NotePartRegion -1 $gapmode $dstart $((start-1));	# ... skip for what comes after the extended partition
     # if we wanted to verify that the previous commands should work under any condition:
     #  $start is before extended partition: pos-extpos = pos-start: $gap,  extpos = start = dstart   =>   extpos-dstart: zerolen,  dstart-start: zerolen
     #  $start is inside extended partition: extpos = max(pos,exstart), dstart = max(pos,start)   =>   pos-extpos: $gap,  extpos-dstart: readable,  dstart-start: zerolen
@@ -361,7 +424,7 @@ skip() { local start=$1 extpos dstart;
     #  annot: $start is after extended partition and extended partition unmarked: before ext. part: $gap, rest of ext.part gets readable, then skips with $gap
     #  annot: $start is after extended partition and extended partition already marked: extpos = dstart = end of ext.part: simply skipping with $gap
   else
-    NotePartRegion 0 $gapmode $pos $((start-1))
+    NotePartRegion -1 $gapmode $pos $((start-1))
   fi
 }
 
@@ -388,7 +451,7 @@ setupdevice() {
 
   trap "cleanup" EXIT
   drvtable="$(mktemp confinedrv-XXXX-XXXX.drvtable)"; 
-  pos=0; prevacc=-2; prevpartno=0; prevstart=-1; prevend=0; extstart=-1; extend=-2; extwritable=false; parttbl=""; found=0; maxdno=0;  #max=0;
+  pos=0; prevacc=-2; prevpartno=-1; prevstart=-1; prevend=0; extstart=-1; extend=-2; extwritable=false; parttbl=""; found=0; maxdno=0;  #max=0;
   {
   while read dno start end blocks parttype fsandflags; do
     if [[ -n "${dno##[0-9]*}" || -z "$dno$start$end$blocks$id$typeandflags" ]]; then 
@@ -407,14 +470,15 @@ setupdevice() {
 
       if [[ pos -eq 0 ]]; then
 	NotePartRegion 0 $mbrmode 0 $start
+	[[ -n ${partsrc[0]} ]] && let found++;
 	let pos=start prevend=start
       fi
       #echo "$dev $pos $start" >&2
 
-      if [[ "${type#*erweitert}" != "$type" || "${type#*extended}" != "$type"  ]]; 
+      if [[ "${type#*erweitert}" != "$type" || "${type#*extended}" != "$type"  ]];     # only very old versions of parted may also output in German
 	then isext=true; [[ "$parttbl" != "msdos" ]] && { err "error: extended partitions only supported with dos partition tables."; exit 208; }
 	else isext=false; 
-	fi
+      fi
 
       if $extwritable && [[ extstart -le start && end -lt extend ]];
 	then continue; fi
@@ -460,16 +524,18 @@ setupdevice() {
       #[[ max -lt end ]] && let max=end
       #[[ min -gt start ]] && let min=start
     fi
-  done < <( parted $org <<<$'unit s\nprint\nquit\n' | sort -g -k 2 -s; ) 
+  done < <( LANG=en_US.UTF-8 parted $org <<<$'unit s\nprint\nquit\n' | sort -g -k 2 -s; ) 
   # done < <( fdisk -lu -b 512 $org | tr '*' ' ' | sort -g -k 2 -s; ) 
   max=$(blockdev --getsz $org)
   if [[ "$parttbl" = "msdos" ]]; then
     skip $max
   else
-    # alternative recovery partition table at the end
-    NotePartRegion 0 $mbrmode $pos $(($max-1))
+    # alternative recovery partition table at the end (not included in mbr=image)
+    NotePartRegion -1 $mbrmode $pos $(($max-1))
   fi
-  virtualdiskend=$(roundup $prevend); if [[ -z "${partsrc[prevpartno]}" ]]; then prevpartno=0; else err "internal error: expected having switched back to the original source disk at the end."; exit 244; fi
+  virtualdiskend=$(roundup $prevend); if [[ prevpartno -lt 0 || -z "${partsrc[prevpartno]}" ]]; then prevpartno=-1; 
+    else cat $drvtable; echo "$prevpartno ${partsrc[prevpartno]}"; err "internal error: expected having switched back to the original source disk at the end."; exit 244; 
+  fi
   IssuePartRegion $prevpartno $prevacc $prevstart $virtualdiskend
 
   } 8>"$drvtable"
@@ -491,7 +557,7 @@ setupdevice() {
   if [[ found -ne partnum ]]; then
     err "overlapping partitions specified (extended partition and partition inside extended partition) or";  
     err "no such partition on disk." # can detect overlapping partitions only in cases where partitions become fully overlapped
-    msg "$found out of ${#parts[@]} partitions processed.\n"
+    msg "$found out of $partnum partitions processed.\n"
     [[ verbose -le 1 ]] && { prn_drvtable; echo >&2; }
     cleanup
     trap '' EXIT
@@ -539,14 +605,26 @@ initpartsrc() { local partsrcc err offset filesize partsize dno start end blocks
   if [[ partsrcc -gt 0 ]]; then
     while read dno start end blocks parttype fsandflags; do
       if [[ -z "${dno##[0-9]*}" && -n "$dno$start$end$blocks" ]]; then 
+	[[ "${start%s}" = "$start" || "${end%s}" = "$end" ]] && { err "internal error: parted / unit s did not seem to output by sector."; exit 244; }
 	let start=${start%s} end=${end%s};
 	if [[ -n "${partsrc[dno]}" ]]; then
-	  let offset=($(roundup start)-start)*512
-	  let filesize=$(stat -c%s "${partsrc[dno]}")
+	  let offset=($(roundup $start)-start)*512;       # ?? stimmt roundup hier? - wird es nicht abgerundet, i.e. größere Zugriffsrechte gewinnen?
+	  let filesize=$(stat -c%s "${partsrc[dno]}");   # Problem: das würde nicht gehen, da er sonst vor dem Image mit dem Einblenden beginnen müßte oder den Beginn verliert
 	  let partsize=(end-start+1)*512
 	  [[ filesize -ne partsize ]] && { err "file size $filesize of ${partsrc[dno]} does not match partition size $partsize."; let err=223; }
 	  let partoffset[dno]=offset
-	  [[ offset -gt 0 && verbose -gt 0 ]] && warn "$org$srcno: ${partsrc[dno]} - Will have to accept offset of $offset for disk image!";
+	  [[ offset -ne 0 && verbose -gt 0 ]] && warn "$org$dno: ${partsrc[dno]} - Will have to accept offset of $offset for disk image; file system there may thus be unreadable!";
+	fi
+	# new and independent if clause: handle a redefined MBR
+	if [[ dno -eq 1 && -n "${partsrc[0]}" ]]; then
+	  let filesize=$(stat -c%s "${partsrc[0]}");
+	  let partsize=(start)*512
+	  let sizeok=1
+	  for allowed_multiple in 1 $possible_page_sizes; do
+	    [[ filesize -eq $(( ( partsize + allowed_multiple - 1 ) / allowed_multiple * allowed_multiple )) ]] && { let sizeok=0; break; }
+	  done
+	  [[ sizeok -ne 0 ]] && { err "file size $filesize for MBR-file does not match the size of the empty space before the first partition ($partsize) and was not rounded up to an allowed page size multiple ($possible_page_sizes) either."; let err=223; }
+	  let partoffset[0]=offset
 	fi
       fi
     done < <( parted $org <<<$'unit s\nprint\nquit\n' ) 
@@ -564,7 +642,7 @@ initpartsrc() { local partsrcc err offset filesize partsize dno start end blocks
 
 initdest() {
   if [[ verbose -gt 1 ]]; then
-    echo "dest - $dest: ${!partsrc[*]} / ${partsrc[*]}"
+    echo "dest - $dest: ${!partsrc[*]} / ${partsrc[*]}";  # indices list - content list: partitions laoded from file
     echo "org - $org e:${parts_e[@]}/z:${parts_z[@]}/r:${parts_r[@]}/w:${parts_w[@]}"
     echo "  (groups: ${groups[@]})"
     echo; #exit
@@ -585,7 +663,7 @@ initdest() {
       echo >&2; exit 201;
     fi
   fi
-  if [[ 0 -eq $(( parts_e + parts_z + parts_r + parts_w )) ]]; then
+  if [[ 0 -eq $(( ${#parts_e[@]} + ${#parts_z[@]} + ${#parts_r[@]} + ${#parts_w[@]} )) ]]; then
     err "drives without a single partition specifier are not allowed.";
     echo "did you mean $dest=$org:r1,2,3:w4,5,6;" >&2;
     echo "or did you mean ${prevdest:-sdz}=./${org#./} (partition image source argument) where '${prevdest:-sdz}' is a/the drive to be set up (being mentioned right before the partition image source argument)." >&2;
@@ -613,9 +691,16 @@ processparams() {
 
   while [[ $# -gt 0 ]]; do
 
+    #
+    # confinedrv sdy=sdb:r3:w5,6 sdy5=/media/esatahdd/partitionimages/sdb5.part
+    # i.e. if destt[0] is an individual partition (praefixed by $dest) rather than a whole drive then it will be the assignment of a partition to a file name
+    #     if so:       destt will be an array of partition numbers (with the $dest-praefix removed from the first of them)
+    #     otherwise:   destt will be empty (unset destt)
+    # new in v1.7.7: confinedrv sdy=sdb:r3:w5,6 mbr=/boot/my.mbr (no virtual drive must start with the letters 'mbr' though)
+    #
     read dest0 org0 <<<"${1/=/ }"
     read -a destt <<<"${dest0//,/ }"
-    dest_first="${destt[0]#$dest}"; if [[ ${#dest_first} -ne ${#destt[0]} ]]; then destt[0]="$dest_first"; else 
+    dest_first="${destt[0]#$dest}"; if [[ ${#dest_first} -ne ${#destt[0]} || -n "$dest" && "$dest_first" = "mbr" ]]; then destt[0]="$dest_first"; else 
       if [[ ${#destt[@]} -gt 1 ]]; then
 	err "'$dest0': praefix does not match the current drive '$dest'"; echo >&2; 
 	exit 201;
@@ -623,6 +708,9 @@ processparams() {
       unset destt; 
     fi
 
+    #
+    # part1=~/file ... or ... mbr=~/file
+    #
     if [[ ${#destt[@]} -ge 1 ]]; then
       let err=0;
       [ -e "$org0" ] || { err "partition from external source: no such file, device or directory: $org0"; err=1; }
@@ -634,20 +722,26 @@ processparams() {
 	isdir=0; 
       fi
       for destpart in "${destt[@]}"; do
-	if [[ -z "${destpart##[0-9]*}" ]]; then
+	if [[ -z "${destpart##[0-9]*}" && -n "${destpart##0*}" || "$destpart" = "mbr" ]]; then
+	  [[ "$destpart" = "mbr" ]] && let destpart=0
 	  if [[ isdir -eq 0 ]]; then 
 	    partsrc[$destpart]="$org0"; 
 	  else
-	    srcpartfile="$org0/$orgg$destpart.part";
+	    if [[ destpart -eq 0 ]]; then srcpartfile="$org0/$orgg.mbr";
+	    else srcpartfile="$org0/$orgg$destpart.part";
+	    fi
 	    [ -e "$srcpartfile" ] && ! [ -d  "$srcpartfile" ]; [[ $? -eq 0 ]] || { err "either $srcpartfile does not exist or it is a directory: expected partition image file."; err=1; }
 	    partsrc[$destpart]="$srcpartfile"
 	  fi
-	else err "partition from external source: invalid destination partition number: $destpart"; err=1;
+	else err "partition from external source: invalid destination partition number: '$destpart'"; err=1;
 	fi
       done
-      [[ err -gt 0 ]] && exit 201;
+      [[ err -gt 0 ]] && { echo >&2; exit 201; }
 
     else
+      #
+      # if multiple drives are set up within the same command line i.e. sdx=... sdy=... perform the setup now before changing to a new virtual target drive
+      #
       if [[ -n "$dest" ]]; then
 	initdest
 	setupdevice;
@@ -657,9 +751,11 @@ processparams() {
       fi	
 
       dest="$dest0"; org="$org0";
+      [[ "${dest#mbr}" != "$dest" ]] && { err "no virtual drive is allowed to start with 'mbr'; use drive names like sdx/sdy/sdz.\n"; exit 201; }
+
       read -a groups <<<"${org//:/ }"
-      org=${groups[0]%%[0-9,]*}; groups[0]=${groups[0]#$org};
-      [[ -z "${groups[0]}" ]] && { let ng=${#groups[@]}; groups[0]="${groups[ng-1]}"; unset groups[ng-1]; }
+      org=${groups[0]%%[0-9,]*}; groups[0]=${groups[0]#$org};  # now: can be sth. like "sda1,3" or "sda:r1,3:z2" (iff first group empty then move last group into first position)
+      [[ -z "${groups[0]}" ]] && { let ng=${#groups[@]}; groups[0]="${groups[ng-1]}"; unset groups[ng-1]; }  
       for group in "${groups[@]}"; do
 	if [[ "${group##[0-9]*}" != "$group" ]]; then
 	  typ='w';
@@ -671,7 +767,7 @@ processparams() {
 	# parts=($(sort -g <<<"${parts[@]}";))
 	err=false
 	for p in ${group//,/ }; do
-	  [[ -n "${p##[0-9]*}" ]] && { err=true; err "invalid partition number: $p.";echo >&2; }
+	  [[ -n "${p##[0-9]*}" || -z "${p##0*}" ]] && { err=true; err "invalid partition number: $p.";echo >&2; }
 	done
 	$err && exit 201;
       done
@@ -691,11 +787,13 @@ processparams() {
 
 }
 
+let readout_mbr=0;
 
 while [[ $# -gt 0 ]]; do
 case "$1" in
-  --version) echo "confinedrv 1.7.6"; echo;;
+  --version) echo "confinedrv 1.7.7"; echo;;
   -h|--help) echo -e "confinedrv [--ra] sdx=sda1,2,3,4 sdy=sdb1,2,3,4"
+             echo -e "confinedrv [--ra] sdx=sda1,2,3 mbr=./myfile.mbr sdx1=./image1.part"
              echo -e "confinedrv [--ra] sdx=sda:r1,2:w3:z4:e7 sdy=sdb:w3"
              echo -e "  --ra ... everything at least readable; default is zeroing out."
 	     echo -e "  --mbr err/zero/ro/rw ... master partition table & boot record access rights (std:ro)"
@@ -703,7 +801,8 @@ case "$1" in
 	     echo -e "confinedrv -d/-r/--remove sdx sdy ...";
 	     echo -e "confinedrv [--noannot] -i/--info sdx sdy ... show annotated drive mapping table";
 	     echo -e "confinedrv --loopusage [sdx sdy] ... show all loop devices used for sdx.";
-	     echo -e "           -v/--verbose/-q/--quiet: show mapping table / do not show alignement warnings\n"
+	     echo -e "           -v/--verbose/-q/--quiet: show mapping table / do not show alignement warnings"
+	     echo -e "confinedrv readout-mbr --from [/dev/]sda --into myfile.mbr (actually reads a bit more than the MBR)\n"
 	     ;;
   -d|-r|--remove) while [ -n "$2" ]; do
 		    drv="${2#/dev/mapper/}"
@@ -713,72 +812,106 @@ case "$1" in
 		  done; 
 		  exit $ret;;
 
-  -i|--info) while [ -n "$2" ]; do
-	       echo "*** $2 ***"; unset orgdev;
+  -i|--info) check4parted;
+             while [ -n "$2" ]; do
+	       echo "*** $2 ***"; unset slurped disk endofdisk ${!loop_*};
 	       while read winstart winlen mode dev devstart; do
-		 loopno="${dev#7:}"; 
+		 loopno="${dev#7:}";   # '7:' - is the major number of all loop devices
 		 if [[ "$loopno" != "$dev" ]]; then
-		   devar="loop_$loopno_"; devident=${!devar};
-		   devar="loop_$loopno"; basedev=${!devar}; 
+		   devar="loop_${loopno}_ident"; devident=${!devar};
+		   devar="loop_${loopno}"; basedev=${!devar}; 
 		   if [[ -z "$devident" ]]; then
 		     read loopdev data basedev < <( losetup /dev/loop${loopno}; ); 
 		     basedev="${basedev#(}"; basedev="${basedev%)}";
 		     [[ -z "$basedev" ]] && basedev=/dev/loop$loopno
 		     isro="$(blockdev --getro /dev/loop$loopno)";
 		     if [[ $isro -eq 0 ]]; then devident="(${basedev}:rw)"; else devident="(${basedev}:ro)"; fi
-		     export $devar="$basedev"; export ${devar}_="$devident";
+		     export $devar="$basedev"; export ${devar}_ident="$devident";
 		   fi
-		   if [[ -z "$orgdev" ]]; then orgdev="$basedev"; annotorgdev="$(awk '{ gsub(/[^A-Za-z0-9]/,"_"); print; }' <<<"$basedev")"; fi;
 		 else unset devident;
 		 fi
-		 if $annotate; then
-		   annotdev=$(awk '{ gsub(/[^A-Za-z0-9]/,"_"); print; }' <<<"$basedev");
-		   [[ -z "${!annotdev}" ]] && slurpdev $annotdev "$basedev"
-		   annotstart=${annotorgdev}_start_${winstart}; if [[ -n "${!annotstart}" ]]; then annotstart="${!annotstart}"; else 
-		     annotstart=${annotorgdev}_end_${winstart}; if [[ -n "${!annotstart}" ]]; then annotstart="${!annotstart}";
-		   else annotstart="$winstart"; fi; fi
-		   let winend=winstart+winlen
-		   annotend=${annotorgdev}_end_${winend}; if [[ -n "${!annotend}" ]]; then annotend="${!annotend}"; else
-		   annotend=${annotorgdev}_start_${winend}; if [[ -n "${!annotend}" && winlen -gt 2048 ]]; then annotend="${!annotend}"; 
-		   else annotend="(+)$winlen"; fi; fi
-		   if [[ winstart -eq devstart ]]; then echo -e "$annotstart\t$annotend   $mode\t$devident";
-		   else echo -e "$annotstart\t$annotend   $mode\t$devident\t$devstart"; fi
-		 else
+		 if ! $annotate; then
 		   if [[ winstart -eq devstart ]]; then echo "$winstart $winlen $mode $devident";
 		   else echo "$winstart $winlen $mode $devident $devstart"; fi
+		 else
+		   annotdev=$(awk '{ gsub(/[^A-Za-z0-9]/,"_"); print; }' <<<"$basedev");
+		   # haspartitions: simply takes all /dev/sda which are not a subpartitions for annotation
+		   let haspartitions=1; [[ "${basedev:0:5}" = "/dev/" && "${basedev%[0-9]}" = "$basedev" ]] && let haspartitions=0;
+		   if [[ haspartitions -eq 0 ]] && ! ein $annotdev $slurped; then 
+		     slurpdev $annotdev "$basedev"
+		     slurped="$annotdev $slurped"
+		   fi
 		 fi
 	       done < <( dmsetup table $2; ) 
+	       if $annotate; then
+		 while read winstart winlen mode dev devstart; do
+		   loopno="${dev#7:}";   # '7:' - is the major number of all loop devices
+		   if [[ "$loopno" != "$dev" ]]; then
+		     devar="loop_${loopno}_ident"; devident=${!devar};
+		     devar="loop_${loopno}"; basedev=${!devar}; 
+		   else
+		     devident="$dev"; basedev="$dev";
+		   fi
+		   let winend=winstart+winlen
+		   for annotorgdev in $slurped; do
+		     eodvar=${annotorgdev}_endofdisk; let endofdisk=${!eodvar}
+		     annotstart=${annotorgdev}_start_${winstart}; if [[ -n "${!annotstart}" ]]; then annotstart="${!annotstart}"; else 
+		       annotstart=${annotorgdev}_end_${winstart}; if [[ -n "${!annotstart}" ]]; then annotstart="${!annotstart}";
+		     else annotstart="$winstart"; fi; fi
+		     annotend=${annotorgdev}_end_${winend}; if [[ -n "${!annotend}" ]]; then annotend="${!annotend}\t"; else
+		     annotend=${annotorgdev}_start_${winend}; if [[ -n "${!annotend}" ]]; then annotend="${!annotend}"; [[ winlen -le 2048 ]] && annotend="${annotend}=(+)$winlen"
+		     elif [[ $winend -eq $endofdisk ]]; then annotend="endofdisk(${annotorgdev##*_})";
+		     else annotend="(+)$winlen\t"; fi; fi
+		   done;
+		   if [[ winstart -eq devstart ]]; then echo -e "$annotstart\t$annotend   $mode\t$devident";
+		   else echo -e "$annotstart\t$annotend   $mode\t$devident\t$devstart"; fi
+		 done < <( dmsetup table $2; ) 
+	       fi
 	       echo; shift;
 	     done;
 	     exit 0;;
 
-  --loopusage) if [ -e /dev/shm/confinedrv-loop.lock -o -e /dev/shm/confinedrv-loops ]; then 
-		  if lockfile -1 -r 3 /dev/shm/confinedrv-loops.lock; then didlock=true; else didlock=false; err "error: could not lock /dev/shm/confinedrv-loops"; fi
+  --loopusage) if [ -e $shm/confinedrv-loops.lock -o -e $shm/confinedrv-loops ]; then 
+		  if mylockfile-create $shm/confinedrv-loops.lock; then didlock=true; else didlock=false; err "error: could not lock [/dev/shm|/tmp]/confinedrv-loops"; fi
 		  if [[ $# -le 1 ]];
-		  then cat /dev/shm/confinedrv-loops
-		  else shift; ( IFS="|"; egrep "$*" /dev/shm/confinedrv-loops; )
+		  then cat $shm/confinedrv-loops
+		  else shift; ( IFS="|"; egrep "$*" $shm/confinedrv-loops; )
 		  fi
-		  $didlock && rm -f /dev/shm/confinedrv-loops.lock 
+		  $didlock && mylockfile-remove $shm/confinedrv-loops.lock 
                else echo "no loop devices in use by confinedrv." >&2; 
 	       fi; echo >&2; 
 	       exit 0;;
 
   --freeloop) let ret=0; while [ -n "$2" ]; do droploop "$2" || let ret=206; shift; done; exit $ret;;
 
-  --ra) readall=true; shift; continue; ;;
+  --ra) readall=true;;
   --gap) case "$2" in
            zero|z|0) gapmode=0;; error|err|e) gapmode=-1;; read|ro|r|1) gapmode=1;; write|read-write|readwrite|w|rw|2) gapmode=2;;
-         esac; shift 2; continue;;
+         esac; shift;;
   --mbr) case "$2" in
            zero|z|0) mbrmode=0;; error|err|e) mbrmode=-1;; read|ro|r|1) mbrmode=1;; write|read-write|readwrite|w|rw|2) mbrmode=2;;
-         esac; shift 2; continue;;
-  -v|--verbose) let verbose++; shift; continue; ;;
-  -q|--quiet) let verbose--; shift; continue; ;;
-  --noannot) annotate=false; shift; continue; ;;
+         esac; shift;;
+  -v|--verbose) let verbose++;;
+  -q|--quiet) let verbose--;;
+  --noannot|--no-annot) annotate=false;;
   --license) license;;
+
+  --into) backup_mbr_file="$2";
+          [[ -e "$backup_mbr_file" ]] && { err "error: file does already exist: '$backup_mbr_file'"; echo >&2; exit 210;  }
+          shift;;
+  --from) if [[ -e "$2" ]]; then read_mbr_from="$2"; 
+          elif [[ -e "/dev/$2" ]]; then  read_mbr_from="/dev/$2"; 
+	  else err "error: device not found: $2"; echo >&2; exit 211; 
+	  fi
+          shift;;
   -*) err "unknown option $1"; echo >&2; exit 201;; 
 
-  *)  [[ $(id -u) -ne 0 ]] && { err "confinedrv must be run as root.";echo; exit 200; }
+  readout-mbr) let readout_mbr=1;;
+
+  *)  [[ readout_mbr -eq 1 ]] && { err "superfluous parameters for readout-mbr: $*"; echo >&2; exit 201; }
+      [[ -n "$backup_mbr_file" || -n "$read_mbr_from" ]]  && { err "use --from and --into only together with readout-mbr."; echo >&2; exit 201; }
+      [[ $(id -u) -ne 0 ]] && { err "confinedrv must be run as root.";echo >&2; exit 200; }
+      check4parted;
       processparams "$@"
       shift $#
 
@@ -786,3 +919,30 @@ case "$1" in
 esac;
 shift;
 done
+
+if [[ readout_mbr -eq 1 ]]; then
+  [[ -z "$backup_mbr_file" ]]  && { err "use --into to specify the backup mbr file."; echo >&2; exit 201; }
+  [[ -z "$read_mbr_from" ]]  && { err "use --from to specify device to read MBR from."; echo >&2; exit 201; }
+  echo "reading out spare space before first partition including the MBR from $read_mbr_from:" >&2
+  check4parted;
+  let length=0;
+  while read dno start end blocks parttype fsandflags; do
+    if [[ "$dno" = "1" ]]; then 
+      [[ "${start%s}" = "$start" || "${end%s}" = "$end" ]] && { err "internal error: parted / unit s did not seem to output by sector."; exit 244; }
+      let sectors_indeed=${start%s}; let read_sectors=$(roundup $sectors_indeed);
+      let count=read_sectors/PGsize;
+      break;
+    fi
+  done < <( parted $read_mbr_from <<<$'unit s\nprint\nquit\n' ) 
+  [[ sectors_indeed -eq 0 ]] && { err "error by parted apparently caused by insufficient permissions." >&2; echo >&2; exit 200; }
+  if [[ read_sectors -ne sectors_indeed ]]; then
+    echo "reading $count * $PAGE_SIZE bytes which is a little bit more than the unused space before the first partition ($read_sectors * 512) ..." >&2;
+  else
+    echo "reading $count * $PAGE_SIZE bytes ..." >&2;
+  fi
+  echo "dd if=$read_mbr_from bs=$PAGE_SIZE count=$count of=$backup_mbr_file"
+  dd if=$read_mbr_from bs=$PAGE_SIZE count=$count of=$backup_mbr_file;
+  [[ $? -eq 0 ]] && echo "done." >&2;
+  echo >&2;
+fi
+
