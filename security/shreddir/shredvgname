@@ -1,0 +1,7 @@
+#!/bin/bash
+vg=$1
+genseq.py $vg 32 | while read newvg; do
+  echo "$vg -> $newvg"
+  vgrename $vg $newvg
+  vg=$newvg
+done

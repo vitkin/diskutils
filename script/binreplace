@@ -1,0 +1,87 @@
+#!/usr/bin/python3
+# -*- coding: utf-8
+# vim: expandtab
+#
+# binreplace
+#  This program may be used under the terms of GPLv3; see: https://www.gnu.org/licenses/gpl-3.0.en.html
+#  If you apply changes please sign our contributor license agreement at https://www.elstel.org/license/CLA-elstel.pdf
+#  so that your changes can be included into the main trunk at www.elstel.org/software/ - look here for other interesting content!
+#  (c) copyright by Elmar Stellnberger, Sep 2019
+#
+
+
+import os, sys;
+
+blocksize = 16384;   # needs to be twice of the disk block size because read/writes are not block aligned
+
+def help(exitcode):
+  print("binreplace [--quiet] if=inputfile [skip=start_byte_inputfile] [seek=start_byte_outputfile] size=byte_count of=outputfile",file=sys.stderr);
+  print("  '-' denotes standard input/output, negative seek values crop to zero reducing size, negative skips start outputting some zeroes",file=sys.stderr);
+  print(file=sys.stderr);
+  sys.exit(exitcode);
+
+if len(sys.argv) <= 1 or sys.argv[1] == "--help":
+  help(0);
+
+else:
+  params = dict([ (param.split('=',2)+[''])[:2] for param in sys.argv[1:] ]);
+  unknown_params = set(params.keys()) - { 'if', 'of', 'seek', 'skip', 'size', '--quiet', '-q' };
+  if unknown_params:
+    print("unknown params: " + ", ".join(list(unknown_params)), file=sys.stderr);
+    sys.exit(1);
+  if "if" not in params or "of" not in params or "size" not in params: help(1);
+  quiet = "--quiet" in params or "-q" in params;
+  try:
+    skip = int(params.get('skip',"0"));
+    seek = int(params.get('seek',"0"));
+    size = int(params['size']);
+  except:
+    help(1);
+
+
+  if seek < 0:
+    size += seek;
+    skip -= seek;
+    seek = 0;
+
+  if size <= 0:
+    sys.exit(0);
+
+  if params.get("if") == "-":
+    infile = 0;
+  else:
+    try: infile = os.open(params.get("if"),os.O_RDONLY);
+    except: print("can not open input file '%s'." % params.get("if"),file=sys.stderr); sys.exit(2);
+
+  if params.get("of") == "-":
+    outfile = 1;
+  else:
+    try: outfile = os.open(params.get("of"),os.O_RDWR|os.O_CREAT);
+    except: print("can not open output file '%s'." % params.get("of"),file=sys.stderr); sys.exit(2);
+
+  os.lseek( outfile, seek, os.SEEK_SET );
+
+  if skip < 0:
+    dozero = min(-skip,size);
+    zeroblock = b'\000' * (blocksize/2);
+    while dozero > 0:
+      written = os.write( outfile, zeroblock[:dozero] );
+      dozero -= written;
+      size -= written;
+    zeroblock = None;
+
+  os.lseek( infile, skip, os.SEEK_SET );
+
+  while size > 0:
+    totransfer = min(blocksize,size);
+    block = os.read(infile,totransfer);
+    size -= len(block);
+    while len(block) > 0:
+      written = os.write(outfile,block);
+      if written == len(block): break;
+      block = block[written:];
+
+  if outfile != 1: os.close(outfile);
+  if infile != 0: os.close(infile);
+  if not quiet: print("done",file=sys.stderr);
+

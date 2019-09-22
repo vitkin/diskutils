@@ -1,0 +1,25 @@
+#!/bin/bash
+if [[ "$1" = "--help" ]]; then
+  echo "$(basename $0) sha256sum-dir root-directory subdir ... uses rootNN.sha256s file with largest NN to compare the  sha256sums of the files in root-directory which are located inside subdir" >&2
+  echo "  root-directory needs to start with a slash and subdir must not start with a dot" >&2;
+  echo >&2;
+
+else
+  let n=0; dir="$(dirname "${1:-.}")"; cmpfile="$dir/root$n.sha256s";  while [ -e "$cmpfile" ]; do let n=n+1; cmpfile="$dir/root$n.sha256s"; done
+  let n=n-1; cmpfile="$dir/root$n.sha256s"; 
+  outfile="test.sha256s";
+  rootdir="${2%/}"; subdir="${3%/}";
+  if [[ "${subdir:0:1}" = "." ]]; then echo "error: subdir must not start with a dot" >&2; exit 1; 
+  elif [[ "${subdir:0:1}" != "/" ]]; then subannot="$subdir"; subdir="/$subdir"; else subannot="${subdir:1}"
+  fi
+  if [[ -e "$outfile" ]]; then
+    grep " $subdir/" <$outfile | sort -t " " -k 2 >$outfile.$subannot.sorted
+  else
+    #find /mnt/boot -type f | egrep -v "^/mnt/(sys|proc|selinux|dev|media|run)/" | while read file; do sha256sum "$file"; done | sed 's# /mnt/# /#'  | sort -t " " -k 2 >$outfile.$subannot.sorted
+    find $rootdir$subdir -type f -print0 | tr '\n []*\000' '?????\n' | egrep -v "^$rootdir/(sys|proc|selinux|dev|media|run)/" | while read file; do sha256sum $file; done | sed "s# $rootdir/# /#"  | sort -t " " -k 2 >$outfile.$subannot.sorted
+  fi
+  echo $outfile.$subannot.sorted ready
+  grep " $subdir/" <$cmpfile | sort -t " " -k 2  >$cmpfile.$subannot.sorted
+  ls -l *.$subannot.sorted
+
+fi

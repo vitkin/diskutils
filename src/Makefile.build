@@ -1,0 +1,10 @@
+
+vpath %.h ..
+vpath %.c ..
+
+
+sparsefile-rescue:  sparsefile-rescue.c sparsefile-writeout.o
+bindiff: bindiff.c sparsefile-writeout.o
+sparsefile-writeout.o: sparsefile-writeout.h sparsefile-writeout.c
+sparsefile-restore:  sparsefile-restore.c
+

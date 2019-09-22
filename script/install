@@ -1,0 +1,5 @@
+#!/bin/sh
+install binreplace /usr/local/bin/
+install confinedrv /usr/local/bin/
+gzip -c confinedrv.8 >/usr/local/share/man/man8/confinedrv.8.gz
+echo "done" >&2

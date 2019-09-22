@@ -1,0 +1,5 @@
+#!/bin/bash
+device=$1
+mount $device /mnt
+find /mnt -type d | sed 's#^/mnt#stat "#;s#$#"#'  | debugfs $device | getblocks >$2
+umount /mnt

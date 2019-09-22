@@ -1,10 +1,13 @@
 #!/bin/bash
 #
-# confinedrv v1.7.7
-# (c) copyright by Elmar Stellnberger, the original author: 2009, Jan 2010, Nov&Dez 2014, Aug 2016
+# confinedrv v1.7.8
+# (c) copyright by Elmar Stellnberger, the original author: 2009, Jan 2010, Nov&Dez 2014, Aug 2016, Sep 2019
 #
 #  further information: www.elstel.org/com; look here for an actual contact address
 #  current email: estellnb@elstel.org; additional email estellnb@gmail.com
+#
+# v 1.7.8: support of whole partition table images (Sep 2019)
+#  * blanking of mbr (and only of first 440B to boot), testing mbr for being blanked and reinstalling an mbr from file
 #
 # v 1.7.7: allow to fade in a file for the mbr: sdy=sdb5,6 mbr=./sdb.mbr
 #  * use lockfile-progs in order to lock the $shm/confinedrv-loops file (lockfile-create) or use the old lockfile-executable as fallback which is still distributed with some distros
@@ -90,6 +93,32 @@ check4parted() {
   which parted 2>&9 >&9 || { err "parted does not seem to be installed; exiting."; echo >&2; exit 208; }
 }
 
+list_partitions() {
+  if [[ virtual -eq 0 ]]; then
+    LANG=en_US.UTF-8 parted "$1" <<<$'unit s\nprint\nquit\n' | sort -g -k 2 -s; 
+  else
+    cat "${1%.blocks}.parttbl";
+  fi
+}
+
+slurp_virtfile() {
+  local cmdident start end virtstart;
+  let virtual=0 virtmax=0;
+  while read cmdident start end virtstart; do
+    if [[ "$cmdident" = "blocks" ]]; then
+      let blocks_start[virtual]=start;
+      let blocks_end[virtual]=end
+      let blocks_virtstart[virtual]=virtstart
+      let virtual+=1
+    elif [[ "$cmdident" = "disksize" ]]; then
+      let virtmax=start
+    fi
+  done <"$virtfile.parttbl";
+  if [[ virtual -eq 0 ]]; then err "no mapping for $virtfile.blocks found in $virtfile.parttbl"; exit 244; 
+  elif [[ virtmax -eq 0 ]]; then err "no disksize directive found in $virtfile.parttbl"; exit 244;
+  fi
+}
+
 mylockfile-create() {
   [[ -n "$2" ]] && { err "internal error: wrong invocation of mylockfile-create."; exit 244; }
   if [[ lockprog -eq 2 ]]; then
@@ -151,7 +180,7 @@ else
 fi
 
 mkvar() { local rndup=$(roundup $1); local rnddwn=$(rounddown $1);
-  [[ -z "$annotdev" ]] && { err "localvars;"; exit; }
+  [[ -z "$annotdev" ]] && { err "localvars;"; exit 244; }
   if [[ $rndup = $rnddwn ]]; then
     export ${annotdev}${3/./_}_$rndup=$2$3; >&2
   else
@@ -170,7 +199,7 @@ slurpdev() { local annotdev basedev; annotdev="$1"; basedev="$2";
       mkvar $start ${dev#/dev/} .start
       mkvar $((end+1)) ${dev#/dev/} .end
     fi
-  done < <( parted $basedev <<<$'unit s\nprint\nquit\n' ) 
+  done < <( list_partitions "$basedev"; ) 
   export $annotdev="slurped"
 }
 
@@ -193,7 +222,7 @@ droploop() {
     loopno="${loop#/dev/loop}"
     if [[ "$dest" = "$target" ]] ; then
       if [[ -z "${loopno##[0-9]*}" ]]; then
-	if [[ -n "${loopuasge[loopno]}" && ( "${loopusage_origin[loopno]}" != "$origin" || "${loopusage_access[loopno]}" != "$access" || "${loopusage_offset[loopno]}" != "$offset" ) ]];then
+	if [[ -n "${loopusage[loopno]}" && ( "${loopusage_origin[loopno]}" != "$origin" || "${loopusage_access[loopno]}" != "$access" || "${loopusage_offset[loopno]}" != "$offset" ) ]];then
 	  warn "inconsistant entries for $dest /dev/loop$loopno in $shm/confinedrv-loops: ignoring any but the last one.";
 	  echo ">> $dest /dev/loop$loopno ${loopusage_origin[loopno]} ${loopusage_access[loopno]} ${loopusage_offset[loopno]}" >&2;
 	  echo ">> $dest $loop $origin $access $offset" >&2;
@@ -226,7 +255,7 @@ droploop() {
   return $err;
 }
 
-verbose=1; readall=false; annotate=true; gapmode=0; mbrmode=1; ret=0;
+verbose=1; readall=false; annotate=true; gapmode=0; mbrmode=1; ret=0; virtual=0;
 
 if [[ $# -le 0 ]]; then
   echo -e "$(basename "$0") --help/--license\n"
@@ -248,12 +277,12 @@ getloops() {
   trap "mylockfile-remove $shm/confinedrv-loops.lock" EXIT
   touch $shm/confinedrv-loops
   while read destination loopdev origin access offset; do
-    if [[ "$origin" = "$org" && offset -eq 0 ]]; then 
+    if [[ "$origin" = "$1" && offset -eq 0 ]]; then 
       if [[ "$access" = "rw" ]]; then 
-	[[ -n "$loop" && "$loop" != "$loopdev" ]] && warn "double allocation in [/dev/shm|/tmp]/confinedrv-loops: $org:ro ~ $loop $loopdev"
+	[[ -n "$loop" && "$loop" != "$loopdev" ]] && warn "double allocation in [/dev/shm|/tmp]/confinedrv-loops: $1:ro ~ $loop $loopdev"
 	export loop="$loopdev"; 
       elif [[ "$access" = "ro" ]]; then 
-	[[ -n "$rolp" && "$rolp" != "$loopdev" ]] && warn "double allocation in [/dev/shm|/tmp]/confinedrv-loops: $org:rw ~ $rolp $loopdev"
+	[[ -n "$rolp" && "$rolp" != "$loopdev" ]] && warn "double allocation in [/dev/shm|/tmp]/confinedrv-loops: $1:rw ~ $rolp $loopdev"
 	export rolp="$loopdev"; 
       fi
     fi
@@ -358,11 +387,24 @@ let PGspare=PGsize-1
 possible_page_sizes=(4096 8192 16384 32768 65536);
 
 IssuePartRegion() { # access start end
-  local partno=$1 access=$2 start=$3 end=$4 length; let length=end-start
+  local partno=$1 access=$2 start=$3 end=$4 length; let length=end-start virtstart=start
   [[ access -lt -1 ]] && return
+  if [[ virtual -gt 0 && partno -lt 0 && access -ge 1 ]]; then
+    let virtstart=-1;
+    for((i=0;i<virtual;i+=1)); do
+      if [[ blocks_start[i] -le start && end -le blocks_end[i] ]]; then
+	let virtstart=start-blocks_start[i]+blocks_virtstart[i]
+	break;
+      fi
+    done
+    if [[ virtstart -lt 0 ]]; then
+      err "required intermediate space at $start not found in partition image";
+      exit 244;
+    fi
+  fi
   if [[ partno -ge 0 ]]; then echo "$start $length linear ${partloop[partno]} 0" >&8
-  elif [[ access -ge 2 ]]; then echo "$start $length linear $loop $start" >&8
-  elif [[ access -eq 1 ]]; then echo "$start $length linear $rolp $start" >&8
+  elif [[ access -ge 2 ]]; then echo "$start $length linear $loop $virtstart" >&8
+  elif [[ access -eq 1 ]]; then echo "$start $length linear $rolp $virtstart" >&8
   elif [[ access -eq 0 ]]; then echo "$start $length zero" >&8
   else echo "$start $length error" >&8
   fi
@@ -386,18 +428,23 @@ NotePartRegion() {
     let start=$(roundup prevend)
     [[ partno -ge 0 && ${partoffset[partno]} != $(((start-prevend)*512)) ]] && { err "internal error: did offset ${partsrc[partno]} with ${partoffset[partno]} though an offset of $((start-prevend)) would have been required."; exit 244; }
     if [[ prevpartno -ge 0 && start -ne prevend ]]; then
-      let intermedstart=$(rounddown prevend)
-      IssuePartRegion $prevpartno $prevacc $prevstart $intermedstart
-      IssuePartRegion -1 $prevacc $intermedstart $start
+      let intermed_start=$(rounddown prevend)
+      if [[ prevacc -ge 2 ]]; then
+	let intermed_acc=1; warn "warning: access rights downgraded rw->ro for intermediate space at [$intermed_start..$start[";
+      else
+	let intermed_accc=prevacc
+      fi
+      IssuePartRegion $prevpartno $prevacc $prevstart $intermed_start
+      IssuePartRegion -1 $intermed_acc $intermed_start $start
     else
       IssuePartRegion $prevpartno $prevacc $prevstart $start
     fi
-    [[ prevend -lt start && verbose -gt 1 ]] && warn "warning: access right extension $(acc2str $access)->$(acc2str $prevacc) $prevend..$((start-1))"
+    [[ prevend -lt start && verbose -gt 1 ]] && warn "warning: access right extension $(acc2str $access)->$(acc2str $prevacc) [$prevend..$start["
   else # prevacc -lt access
     let start=$(rounddown prevend)
     [[ partno -le -1 ]] || { err "internal error at $LINENO."; exit 244; }
     IssuePartRegion -1 $prevacc $prevstart $start
-    [[ start -lt prevend && verbose -gt 1 ]] && warn "warning: access right extension $(acc2str $prevacc)->$(acc2str $access) $start..$(($prevend-1))"
+    [[ start -lt prevend && verbose -gt 1 ]] && warn "warning: access right extension $(acc2str $prevacc)->$(acc2str $access) [$start..$prevend["
   fi
   let prevstart=start prevend=end+1 prevacc=access prevpartno=partno;
 }
@@ -524,9 +571,13 @@ setupdevice() {
       #[[ max -lt end ]] && let max=end
       #[[ min -gt start ]] && let min=start
     fi
-  done < <( LANG=en_US.UTF-8 parted $org <<<$'unit s\nprint\nquit\n' | sort -g -k 2 -s; ) 
+  done < <( list_partitions "$org"; ) 
   # done < <( fdisk -lu -b 512 $org | tr '*' ' ' | sort -g -k 2 -s; ) 
-  max=$(blockdev --getsz $org)
+  if [[ virtual -eq 0 ]]; then
+    let max=$(blockdev --getsz $org)
+  else
+    let max=virtmax
+  fi
   if [[ "$parttbl" = "msdos" ]]; then
     skip $max
   else
@@ -540,7 +591,7 @@ setupdevice() {
 
   } 8>"$drvtable"
 
-  if [[ maxdno -ge 5 && extpend -lt 0 ]] && [[ "$parttbl" = "msdos" ]]; then
+  if [[ maxdno -ge 5 && extend -lt 0 ]] && [[ "$parttbl" = "msdos" ]]; then
     err "extended partitions given as parameter but no extended partition called '...erweitert' or '...extended' found/listed by parted 'print'";
     echo "you may wish to correct the matching for the name of the exteneded partition in the sources" >&2;
     err "as this is used as msdos disk the mapping will not function for extended partitions."
@@ -609,7 +660,10 @@ initpartsrc() { local partsrcc err offset filesize partsize dno start end blocks
 	let start=${start%s} end=${end%s};
 	if [[ -n "${partsrc[dno]}" ]]; then
 	  let offset=($(roundup $start)-start)*512;       # ?? stimmt roundup hier? - wird es nicht abgerundet, i.e. größere Zugriffsrechte gewinnen?
-	  let filesize=$(stat -c%s "${partsrc[dno]}");   # Problem: das würde nicht gehen, da er sonst vor dem Image mit dem Einblenden beginnen müßte oder den Beginn verliert
+	  # Problem: das würde nicht gehen, da er sonst vor dem Image mit dem Einblenden beginnen müßte oder den Beginn verliert
+	  if [[ -b "${partsrc[dno]}" ]]; then let filesize=$(blockdev --getsz "${partsrc[dno]}")*512; 
+	  else let filesize=$(stat -c%s "${partsrc[dno]}"); 
+	  fi
 	  let partsize=(end-start+1)*512
 	  [[ filesize -ne partsize ]] && { err "file size $filesize of ${partsrc[dno]} does not match partition size $partsize."; let err=223; }
 	  let partoffset[dno]=offset
@@ -619,15 +673,11 @@ initpartsrc() { local partsrcc err offset filesize partsize dno start end blocks
 	if [[ dno -eq 1 && -n "${partsrc[0]}" ]]; then
 	  let filesize=$(stat -c%s "${partsrc[0]}");
 	  let partsize=(start)*512
-	  let sizeok=1
-	  for allowed_multiple in 1 $possible_page_sizes; do
-	    [[ filesize -eq $(( ( partsize + allowed_multiple - 1 ) / allowed_multiple * allowed_multiple )) ]] && { let sizeok=0; break; }
-	  done
-	  [[ sizeok -ne 0 ]] && { err "file size $filesize for MBR-file does not match the size of the empty space before the first partition ($partsize) and was not rounded up to an allowed page size multiple ($possible_page_sizes) either."; let err=223; }
-	  let partoffset[0]=offset
+	  [[ filesize -lt partsize ]] && { err "file size $filesize for MBR-file is shorter than the unpartitioned space before the first partition ($partsize); please extend with zeroes dd if=/dev/zero bs=512 count=$(( (partsize-filesize+511) / 512 )) of=/dev/stdout >>my.mbr"; let err=223; }
+	  let partoffset[0]=0
 	fi
       fi
-    done < <( parted $org <<<$'unit s\nprint\nquit\n' ) 
+    done < <( list_partitions "$org"; ) 
 
     for srcno in ${!partsrc[@]}; do
       if [[ -z "${partoffset[srcno]}" ]]; then
@@ -648,6 +698,12 @@ initdest() {
     echo; #exit
   fi
 
+  if [[ -n "$virtfile" ]]; then
+    slurp_virtfile
+    [[ -n "$org" && "$org" != "$virtfile" ]] && { err "parttbl-file needs to be called like virtual base disk: sdx=sda1,2,3 parttbl=sda.parttbk or use sdx=1,2,3"; exit 244; }
+    org="$virtfile.blocks"
+  fi
+
   [[ -z "$org" ]] && { echo "usage: confinedrv newdevice=olddevice or newdevice=olddevice1,2,3 respectively (see --help)." >&2; echo >&2; exit 201; }
   [[ "${org#./}" = "${org#../}" ]] && { [ -e "/dev/$org" ] && org="/dev/$org"; }
   [ -e "$org" ] || { err "device $org not found."; echo >&2; exit 203; }
@@ -663,7 +719,7 @@ initdest() {
       echo >&2; exit 201;
     fi
   fi
-  if [[ 0 -eq $(( ${#parts_e[@]} + ${#parts_z[@]} + ${#parts_r[@]} + ${#parts_w[@]} )) ]]; then
+  if [[ 0 -eq $(( ${#parts_e[@]} + ${#parts_z[@]} + ${#parts_r[@]} + ${#parts_w[@]} )) && -z "$virtfile" ]]; then
     err "drives without a single partition specifier are not allowed.";
     echo "did you mean $dest=$org:r1,2,3:w4,5,6;" >&2;
     echo "or did you mean ${prevdest:-sdz}=./${org#./} (partition image source argument) where '${prevdest:-sdz}' is a/the drive to be set up (being mentioned right before the partition image source argument)." >&2;
@@ -700,7 +756,7 @@ processparams() {
     #
     read dest0 org0 <<<"${1/=/ }"
     read -a destt <<<"${dest0//,/ }"
-    dest_first="${destt[0]#$dest}"; if [[ ${#dest_first} -ne ${#destt[0]} || -n "$dest" && "$dest_first" = "mbr" ]]; then destt[0]="$dest_first"; else 
+    dest_first="${destt[0]#$dest}"; if [[ ${#dest_first} -ne ${#destt[0]} || -n "$dest" && ( "$dest_first" = "mbr" || "$dest_first" = "parttbl" ) ]]; then destt[0]="$dest_first"; else 
       if [[ ${#destt[@]} -gt 1 ]]; then
 	err "'$dest0': praefix does not match the current drive '$dest'"; echo >&2; 
 	exit 201;
@@ -713,8 +769,10 @@ processparams() {
     #
     if [[ ${#destt[@]} -ge 1 ]]; then
       let err=0;
-      [ -e "$org0" ] || { err "partition from external source: no such file, device or directory: $org0"; err=1; }
-      if  [ -d "$org0" ]; then 
+      if [[ "${destt[0]}" != "parttbl" ]]; then
+        [[ -e "$org0" ]] || { err "partition from external source: no such file, device or directory: $org0"; err=1; }
+      fi
+      if  [[ -d "$org0" ]]; then 
 	isdir=1; org0="${org0%/}"; 
 	orgg="$( awk '/[Dd][Ii][Ss][Kk]/{ $0=$2; gsub(/^[/]dev[/]/,""); gsub(":$",""); print; }' "$org0/unitsprint.parted" )";
 	[[ -z "$orgg" ]] && { err "partition index file $org0/unitsprint.parted seems to be corrupt (does not contain a Disk-line) or does not exist at all."; }
@@ -722,7 +780,10 @@ processparams() {
 	isdir=0; 
       fi
       for destpart in "${destt[@]}"; do
-	if [[ -z "${destpart##[0-9]*}" && -n "${destpart##0*}" || "$destpart" = "mbr" ]]; then
+	if [[ "$destpart" = "parttbl" ]]; then
+	  virtfile="${org0%.xx}";
+	  [[ -f "$virtfile.blocks" && -f "$virtfile.parttbl" ]] || { err "either $virtfile.blocks or $virtfile.parttbl do not exist."; err=1; }
+	elif [[ -z "${destpart##[0-9]*}" && -n "${destpart##0*}" || "$destpart" = "mbr" ]]; then
 	  [[ "$destpart" = "mbr" ]] && let destpart=0
 	  if [[ isdir -eq 0 ]]; then 
 	    partsrc[$destpart]="$org0"; 
@@ -730,7 +791,7 @@ processparams() {
 	    if [[ destpart -eq 0 ]]; then srcpartfile="$org0/$orgg.mbr";
 	    else srcpartfile="$org0/$orgg$destpart.part";
 	    fi
-	    [ -e "$srcpartfile" ] && ! [ -d  "$srcpartfile" ]; [[ $? -eq 0 ]] || { err "either $srcpartfile does not exist or it is a directory: expected partition image file."; err=1; }
+	    [[ -e "$srcpartfile" ]] && ! [[ -d  "$srcpartfile" ]]; [[ $? -eq 0 ]] || { err "either $srcpartfile does not exist or it is a directory: expected partition image file."; err=1; }
 	    partsrc[$destpart]="$srcpartfile"
 	  fi
 	else err "partition from external source: invalid destination partition number: '$destpart'"; err=1;
@@ -752,6 +813,7 @@ processparams() {
 
       dest="$dest0"; org="$org0";
       [[ "${dest#mbr}" != "$dest" ]] && { err "no virtual drive is allowed to start with 'mbr'; use drive names like sdx/sdy/sdz.\n"; exit 201; }
+      [[ "${dest#parttbl}" != "$dest" ]] && { err "no virtual drive is allowed to start with 'parttbl'; use drive names like sdx/sdy/sdz.\n"; exit 201; }
 
       read -a groups <<<"${org//:/ }"
       org=${groups[0]%%[0-9,]*}; groups[0]=${groups[0]#$org};  # now: can be sth. like "sda1,3" or "sda:r1,3:z2" (iff first group empty then move last group into first position)
@@ -787,11 +849,11 @@ processparams() {
 
 }
 
-let readout_mbr=0;
+let readout_mbr=0 usedd=0;
 
 while [[ $# -gt 0 ]]; do
 case "$1" in
-  --version) echo "confinedrv 1.7.7"; echo;;
+  --version) echo "confinedrv 1.7.8"; echo;;
   -h|--help) echo -e "confinedrv [--ra] sdx=sda1,2,3,4 sdy=sdb1,2,3,4"
              echo -e "confinedrv [--ra] sdx=sda1,2,3 mbr=./myfile.mbr sdx1=./image1.part"
              echo -e "confinedrv [--ra] sdx=sda:r1,2:w3:z4:e7 sdy=sdb:w3"
@@ -802,7 +864,15 @@ case "$1" in
 	     echo -e "confinedrv [--noannot] -i/--info sdx sdy ... show annotated drive mapping table";
 	     echo -e "confinedrv --loopusage [sdx sdy] ... show all loop devices used for sdx.";
 	     echo -e "           -v/--verbose/-q/--quiet: show mapping table / do not show alignement warnings"
-	     echo -e "confinedrv readout-mbr --from [/dev/]sda --into myfile.mbr (actually reads a bit more than the MBR)\n"
+	     echo -e "confinedrv readout-mbr --from [/dev/]sda --into myfile.mbr (actually reads more than the MBR including all the unpartitioned space in front and the primary part of the partition table)"
+	     echo -e "confinedrv reinstall-mbr --from myfile.mbr --into /dev/sda ... copy first 440 Byte from file to disk device"
+	     echo -e "confinedrv compare-mbr --from myfile.mbr --with [/dev/]sda ... compare myfile.mbr with the beginning of /dev/sda"
+	     echo -e "confinedrv blank-mbr --into /dev/sda ... overwrite first 440 bytes with zeroes"
+	     echo -e "confinedrv test-mbr-blanked --from [/dev/]sda ... check if first 440 bytes are zero"
+	     echo -e "confinedrv readout-parttbl [--usedd] --from [/dev/]sda --into disk-images/sda.xx ... reads partition table into files sda.blocks (binary) and sda.parttbl (text)"
+	     echo -e "confinedrv sdx=1,2,3 parttbl=sda.xx sdx1=sda1.part sdx2=sda2.part sdx3=sda3.part ... uses the partition table image files sda.blocks (binary) and sda.parttbl (text)\n"
+	     subcommand="";
+	     set --
 	     ;;
   -d|-r|--remove) while [ -n "$2" ]; do
 		    drv="${2#/dev/mapper/}"
@@ -896,20 +966,25 @@ case "$1" in
   --noannot|--no-annot) annotate=false;;
   --license) license;;
 
-  --into) backup_mbr_file="$2";
-          [[ -e "$backup_mbr_file" ]] && { err "error: file does already exist: '$backup_mbr_file'"; echo >&2; exit 210;  }
+  --into) into="$2";
           shift;;
-  --from) if [[ -e "$2" ]]; then read_mbr_from="$2"; 
-          elif [[ -e "/dev/$2" ]]; then  read_mbr_from="/dev/$2"; 
+  --from) if [[ -e "$2" ]]; then from="$2"; 
+          elif [[ -e "/dev/$2" ]]; then  from="/dev/$2"; 
 	  else err "error: device not found: $2"; echo >&2; exit 211; 
 	  fi
           shift;;
+  --with) if [[ -e "$2" ]]; then with="$2"; 
+          elif [[ -e "/dev/$2" ]]; then  with="/dev/$2"; 
+	  else err "error: device not found: $2"; echo >&2; exit 211; 
+	  fi
+          shift;;
+  --usedd) usedd=1;;
   -*) err "unknown option $1"; echo >&2; exit 201;; 
 
-  readout-mbr) let readout_mbr=1;;
+  readout-mbr|compare-mbr|reinstall-mbr|blank-mbr|test-mbr-blanked|readout-parttbl) subcommand="$1";;
 
   *)  [[ readout_mbr -eq 1 ]] && { err "superfluous parameters for readout-mbr: $*"; echo >&2; exit 201; }
-      [[ -n "$backup_mbr_file" || -n "$read_mbr_from" ]]  && { err "use --from and --into only together with readout-mbr."; echo >&2; exit 201; }
+      [[ -n "$from" || -n "$into" || -n "$with" ]]  && { err "use --from, --with and --into only together with readout-mbr, compare-mbr and related commands."; echo >&2; exit 201; }
       [[ $(id -u) -ne 0 ]] && { err "confinedrv must be run as root.";echo >&2; exit 200; }
       check4parted;
       processparams "$@"
@@ -920,9 +995,12 @@ esac;
 shift;
 done
 
-if [[ readout_mbr -eq 1 ]]; then
-  [[ -z "$backup_mbr_file" ]]  && { err "use --into to specify the backup mbr file."; echo >&2; exit 201; }
-  [[ -z "$read_mbr_from" ]]  && { err "use --from to specify device to read MBR from."; echo >&2; exit 201; }
+if [[ "$subcommand" = "readout-mbr" ]]; then
+  [[ -z "$into" ]]  && { err "use --into to specify the backup mbr file."; echo >&2; exit 201; }
+  [[ -z "$from" ]]  && { err "use --from to specify device to read MBR from."; echo >&2; exit 201; }
+  [[ -n "$with" ]]  && { err " --with has no meaning for $subcommand."; echo >&2; exit 201; }
+  backup_mbr_file="$into"; read_mbr_from="$from";
+  [[ -e "$into" ]] && { err "error: file does already exist: '$into'"; echo >&2; exit 210;  }
   echo "reading out spare space before first partition including the MBR from $read_mbr_from:" >&2
   check4parted;
   let length=0;
@@ -933,16 +1011,116 @@ if [[ readout_mbr -eq 1 ]]; then
       let count=read_sectors/PGsize;
       break;
     fi
-  done < <( parted $read_mbr_from <<<$'unit s\nprint\nquit\n' ) 
+  done < <( list_partitions "$read_mbr_from"; ) 
   [[ sectors_indeed -eq 0 ]] && { err "error by parted apparently caused by insufficient permissions." >&2; echo >&2; exit 200; }
   if [[ read_sectors -ne sectors_indeed ]]; then
     echo "reading $count * $PAGE_SIZE bytes which is a little bit more than the unused space before the first partition ($read_sectors * 512) ..." >&2;
   else
     echo "reading $count * $PAGE_SIZE bytes ..." >&2;
   fi
-  echo "dd if=$read_mbr_from bs=$PAGE_SIZE count=$count of=$backup_mbr_file"
-  dd if=$read_mbr_from bs=$PAGE_SIZE count=$count of=$backup_mbr_file;
+  echo "dd if=$read_mbr_from bs=$PAGE_SIZE count=$count of=$backup_mbr_file" >&2
+  dd if="$read_mbr_from" bs=$PAGE_SIZE count=$count of="$backup_mbr_file";
   [[ $? -eq 0 ]] && echo "done." >&2;
   echo >&2;
-fi
+
+elif [[ "$subcommand" = "compare-mbr" ]]; then
+  [[ -z "$from" ]]  && { err "use --from to specify the file with MBR/ blocks from start of the disk."; echo >&2; exit 201; }
+  [[ -z "$with" ]]  && { err "use --with to specify the device to compare with."; echo >&2; exit 201; }
+  [[ -n "$into" ]]  && { err " --into has no meaning for $subcommand."; echo >&2; exit 201; }
+  [[ -e "$with" ]] || { err "error: device does not exist: '$with'"; echo >&2; exit 210;  }
+
+  from_size=$(stat --printf %s "$from")
+  if which bindiff 2>&9 >&9; then
+    echo "comparing (master boot record is within first 440 Byte, then comes the disk signature (4 bytes) and from 444 to 512 the partition table with boot signature, bindiff counts from zero ..." >&2
+    dd if="$with" bs=$from_size count=1 of=/dev/stdout 2>&9 | bindiff --print bs=1 /dev/stdin "$from"
+  else
+    echo "comparing (master boot record is within first 440 Byte, then comes the disk signature (4 bytes) and from 444 to 512 the partition table with boot signature (cmp: Byte 445 since it counts from one)..." >&2
+    dd if="$with" bs=$from_size count=1 of=/dev/stdout 2>&9 | cmp /dev/stdin "$from"
+    [[ $? -eq 0 ]] && echo "compares ok; no differences found." >&2;
+  fi
+
+elif [[ "$subcommand" = "reinstall-mbr"  || "$subcommand" = "blank-mbr" ]]; then
+  if [[ "$subcommand" = "blank-mbr" ]]; then
+    [[ -n "$from" ]]  && { err " --from has no meaning for $subcommand."; echo >&2; exit 201; }
+    from="/dev/zero";
+  else
+    [[ -z "$from" ]]  && { err "use --from to specify the file to read MBR from (first 440 Byte of that file)."; echo >&2; exit 201; }
+  fi
+  [[ -z "$into" ]]  && { err "use --into for the device to insert the MBR into."; echo >&2; exit 201; }
+  [[ -n "$with" ]]  && { err " --with has no meaning for $subcommand."; echo >&2; exit 201; }
+  [[ -e "$into" ]] || { err "error: device does not exist: '$into'"; echo >&2; exit 210;  }
+
+  echo "inserting (overwriting) MBR of $into with $from ..." >&2
+  echo "binreplace if=$from seek=0 size=440 of=$into" >&2
+  binreplace if="$from" seek=0 size=440 of="$into"
+
+elif [[ "$subcommand" = "test-mbr-blanked" ]]; then
+  [[ -z "$from" ]]  && { err "use --from to specify the device to test for a blanked mbr."; echo >&2; exit 201; }
+  [[ -n "$with" ]]  && { err " --with has no meaning for $subcommand."; echo >&2; exit 201; }
+  [[ -n "$into" ]]  && { err " --into has no meaning for $subcommand."; echo >&2; exit 201; }
+
+  echo "comparing first 440 bytes with /dev/zero" >&2
+  if which bindiff 2>&9 >&9; then
+    ( dd if="$from" bs=440 count=1 of=/dev/stdout 2>&9 | bindiff --print bs=1 if1=/dev/stdin if2=/dev/fd/3 3< <( dd if=/dev/zero bs=440 count=1 of=/dev/stdout 2>&9; ); ) 
+  else
+    ( dd if="$from" bs=440 count=1 of=/dev/stdout 2>&9 | cmp /dev/stdin /dev/fd/3 3< <( dd if=/dev/zero bs=440 count=1 of=/dev/stdout 2>&9; ); ) 
+    [[ $? -eq 0 ]] && echo "compares ok; no differences found." >&2;
+  fi
+
+elif [[ "$subcommand" = "readout-parttbl" ]]; then
+  [[ -z "$into" ]]  && { err "use --into to specify the partition table blocks and index files (--into sda.xx)."; echo >&2; exit 201; }
+  [[ -z "$from" ]]  && { err "use --from to specify device to read the partition table from."; echo >&2; exit 201; }
+  [[ -n "$with" ]]  && { err " --with has no meaning for $subcommand."; echo >&2; exit 201; }
+  [[ "$into" = "${into%.xx}" ]] && { err "--into file must end with .xx where .xx will be replaced with .blocks and .parttbl" >&2; echo >&2; exit 201; }
+  blocks_file="${into%.xx}.blocks";
+  parttbl_file="${into%.xx}.parttbl";
+  for f in $blocks_file $parttbl_file; do
+    [[ -e "$i" ]] && { err "error: file does already exist: '$i'"; echo >&2; exit 210;  }
+  done
+  check4parted;
+  if [[ usedd -eq 0 ]]; then
+    if which binreplace 2>&9 >&9; then replok=1; else replok=0; fi
+  else replok=0; 
+  fi
+  echo "reading out partition table and spare spaces" >&2
+  let prevend=0 virtual=0 virtoffset=0;
+  while read dno start end blocks partttype fsandflags; do
+    if [[ -z "${dno##[0-9]*}" && -n "$dno$start" ]]; then 
+      [[ "${start%s}" = "$start" || "${end%s}" = "$end" ]] && { err "internal error: parted / unit s did not seem to output by sector."; exit 244; }
+      let start=${start%s} end=${end%s}; let end+=1;
+
+      if [[ "${parttype#*erweitert}" != "$parttype" || "${parttype#*extended}" != "$parttype"  ]];     # only very old versions of parted may also output in German
+	then let isext=1;
+	else let isext=0; 
+      fi
+
+      if [[ prevend -lt start && isext -eq 0 ]]; then
+	let blockstart=$(rounddown prevend);
+	let blockend=$(roundup start);
+	let blocknum=blockend-blockstart;
+	if [[ replok -eq 1 ]]; then
+	  binreplace --quiet if="$from" skip=$((blockstart*512)) size=$((blocknum*512)) seek=$((virtoffset*512)) of="$blocks_file"
+	else
+	  dd if="$from" bs=512 skip=$blockstart count=$blocknum seek=$virtoffset of="$blocks_file"
+	fi
+	let blocks_start[virtual]=blockstart
+	let blocks_end[virtual]=blockend
+	let blocks_virtstart[virtual]=virtoffset
+	let virtual+=1 virtoffset+=blocknum
+	let prevend=end
+      fi
+    fi
+  done < <( list_partitions "$from" | tee "$parttbl_file"; )
+  for((i=0;i<virtual;i++)); do
+    echo "blocks ${blocks_start[i]} ${blocks_end[i]} ${blocks_virtstart[i]}";
+  done >>"$parttbl_file"
+  if [[ -b "$from" ]]; then
+    echo "disksize $(blockdev --getsz "$from")" >>$parttbl_file;
+  else
+    echo "disksize $((($(stat -c%s "$from")+511)/512))" >>$parttbl_file;
+  fi
+  echo "done" >&2;
+  echo >&2;
+
+fi 9>/dev/null
 

@@ -35,19 +35,57 @@ confinedrv \- limit the partitions of an existing drive to read-only, read-write
 .RB { --info | -i  }
 .IR sdx " [ " "sdy ..." " ] "
 .br
+.B confinedrv readout-parttbl
+.RI "[--usedd]"
+.BI --from " [/dev/]sda"
+.BI --into " /home/user/disk-images/my.xx"
+.br
+.B confinedrv
+.RI [ OPTIONS ]
+.IR sdx=my1,6 
+.BI parttbl =my.xx
+.BI sdx1= sda1.part 
+.BI sdx6= sda6.part
+.br
+.B confinedrv
+.RI [ OPTIONS ]
+.IR sdx=1,6 "
+.BI parttbl =my.xx
+.BI sdx1= sda1.part 
+.BI sdx6= sda6.part
+.br
+.B confinedrv
+.RI [ OPTIONS ]
+.IR sdx=
+.BI parttbl =my.xx
+.br
 .B confinedrv readout-mbr 
-.BI --from " sda"
+.BI --from " [/dev/]sda"
 .BI --into " /boot/sda.mbr"
+.br
+.B confinedrv reinstall-mbr 
+.BI --from " sda.mbr"
+.BI --into " /dev/sda"
+.br
+.B confinedrv compare-mbr 
+.BI --from " sda.mbr"
+.BI --with " [/dev/]sda"
+.br
+.B confinedrv blank-mbr 
+.BI --into " /dev/sda"
+.br
+.B confinedrv test-mbr-blanked
+.BI --from " [/dev/]sda"
 .br
 .BI "confinedrv --version / --license / --help "
 .br
 
 .SH DESCRIPTION
-This tool allows you to limit existing partitions to write, read only, zero on read or no-read access by creating an own virtual drive with confined access rights mirroring the original (\fINo read access simulates a disk error.\fR). This can f.i. be used by a virtual machine to safely boot into one or more operating systems that reside on the same disk as your host operating system. Since version 1.7.6 the additional possibility is given to fade in a partition image file previously backed up with \fIdd\fR or \fIddrescue\fR (as shown in the third disk setup example above.). Such an image must have exactly the same size as the partition it replaces inside the virtual drive.
+This tool allows you to limit existing partitions to write, read only, zero on read or no-read access by creating an own virtual drive with confined access rights mirroring the original (\fINo read access simulates a disk error.\fR). This can f.i. be used by a virtual machine to safely boot into one or more operating systems that reside on the same disk as your host operating system. Since version 1.7.6 the additional possibility is given to fade in a partition image file previously backed up with \fIdd\fR or \fIddrescue\fR (as shown in the third disk setup example above.). Such an image must have exactly the same size as the partition it replaces inside the virtual drive. Since version 1.7.8 the partition table including intermediate unused space between partitions can be backuped and used as a virtual drive later on while individual partition images need to be backuped separately. Furtherhmore confinedrv offers options to blank, compare and reinstall a previous bootloader which can be used to eradicate boot sector viruses.
+
 
 .SH SEMANTIC
-confinedrv will mirror your drive 1:1 giving read and write access to the specified sections on your disk. Only the mentioned partitions will be writable (\fIsimple format\fR). If the \fI--ra\fR option is given then it will addtionally grant all other visible partitions read only access. The second command line format allows to specify exactly for which partition read, write, zero or error on access should be granted. Intermediate space between partitions will be zeroed out by default (\fI--gap option\fR) as long as it does not pertain to the extended partition. Extended partition intermediate spaces contain a linked list of partition tables which need to remain readable to ensure correct recognition of all partitions though they may themselves not be accessible (\fIThese intermediate spaces will always be read only no matter what options are given.\fR). Note that specifying a whole extended partition as writable will even make these intermediate spaces writable so that repartitioning would still be possible to a certain extent if you would do that directly without tools. To avoid this do not specify the whole extended partition as writable but rather all its individual partitions because this will protect the partition table from suffering any damage.
-
+confinedrv will mirror your drive 1:1 giving read and write access to the specified sections on your disk. Only the mentioned partitions will be writable (\fIsimple format\fR). If the \fI--ra\fR option is given then it will addtionally grant all other visible partitions read only access. The second command line format allows to specify exactly for which partition read, write, zero or error on access should be granted. Intermediate space between partitions will be zeroed out by default (\fI--gap option\fR) as long as it does not pertain to the extended partition. Extended partition intermediate spaces contain a linked list of partition tables which need to remain readable to ensure correct recognition of all partitions though they may themselves not be accessible (\fIThese intermediate spaces will always be read only no matter what options are given.\fR). Note that specifying a whole extended partition as writable will even make these intermediate spaces writable so that repartitioning would still be possible to a certain extent if you would do that directly without tools. To avoid this do not specify the whole extended partition as writable but rather all its individual partitions because this will protect the partition table from suffering any damage. 
 .SH WARNING
 confinedrv works on top of Device Mapper and can only limit access rights on a per memory page basis. On x86 systems a memory page used to be 4096 bytes while disk space keeps being organized in units of 512 bytes (4096*1/4=512). Be sure to align partitions to page bounderies when creating partitions with fdisk (\fIf.i. parted -a optimal /dev/sdf or fdisk -H 32 -S 32 for 512KB alignment as also recommended for SSDs (32*32*512 = 2^5 * 2^5 * 512 = 1024 * 512 = 512K)\fR). Otherwise confinedrv will not be fully capable of protecting your drive (up to three blocks at the beginning and end of each partition may end up having extended access rights (\fI see --info or --verbose\fR). If you choose to fade in a partition image from file at a non aligned position confinedrv should basically be capable of doing so. However up to \fI3*512\fR Bytes including the partitions boot record at the beginning of the image may be ignored and taken from the base medium instead.
 
@@ -61,6 +99,9 @@ set access rights for the master boot record, the master partition table and for
 .TP
 .RI "\fB--gap\fR {" err | zero | ro | rw }
 set access rights for gaps between primary partitions (\fIgaps inside extended partition are always read-only.\fR); default is zero.
+.TP
+.B --usedd
+used \fBdd\fR instead of \fBbinreplace\fR even if \fIbinreplace\fR is available to create a partition table image by \fBreadout-parttbl\fR.
 .TP
 .B "--verbose / -v"
 be more verbose; show mapping table for the drive to be created
@@ -91,6 +132,9 @@ show all loop devices in use or all loop devices used by the given virtual drive
 .TP
 .B readout-mbr --from \fIsda \fB--into\fI /boot/sda.mbr\fR
 read out the disk space before the first partition from \fI/dev/sda\fR which includes the Master Boot Record and at least part of the partition table and save that to the file \fI/boot/sda.mbr\fR.
+.TP
+.B blank-mbr --into \fIsda \fR
+Zero the first 440 Byte containing the bootloader code for the specified disk. This removes any possible malware from the bootsector of a disk that should never be booted. You can later on test with \fBtest-mbr-blanked\fR whether the master boot record is still blank.
 .TP
 
 .SH EXAMPLES
@@ -132,13 +176,17 @@ confinedrv has preliminary support for GPT partition tables since version 1.7.2 
 
 .SH SEE ALSO
 .BR kpartx (8),
+.BR partprobe (8),
 .BR qemu (1),
 .BR dmsetup (8),
 .BR losetup (8),
 .BR parted (8),
 .BR dd (1),
+.BR binreplace (1),
 .BR ddrescue (1),
 .BR getconf (1).
+
+
 
 .SH AUTHORS
 
@@ -150,5 +198,5 @@ This program may be used under the terms of GPLv3; see: https://www.gnu.org/lice
 .br
 If you apply changes please sign our contributor license agreement at https://www.elstel.org/license/CLA-elstel.pdf so that your changes can be included into the main trunk at www.elstel.org/qemu/
 .br
-(c) copyright by Elmar Stellnberger 2016
+(c) copyright by Elmar Stellnberger 2019
  

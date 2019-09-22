@@ -1,0 +1,18 @@
+#!/bin/bash
+[ $# -ne 2 -a $# -ne 3 ] && { echo "shredblocks <blockfile> <targetdevice> [<blocksize>]"; exit 1;}
+source="$1"
+target="$2"
+if [ -z "$3" ]; then 
+  let bs=$(tune2fs -l $target | grep 'Block size:' | sed 's#[^0-9]*##')
+else let bs=$3; fi
+[[ bs -le 0 ]] && { echo "could not get block size; exiting."; exit; }
+echo "blocksize: $bs"
+
+for i in $(seq 32); do
+  echo "shred runthrough #$i"
+  tr '-' ' ' <$source | while read von bis; do
+    if [ -n "$bis" ]; then count=$((bis-von+1)); else count=1; fi
+    dd if=/dev/urandom bs=$bs skip=$von count=$count of=$target 2>>shred.log
+  done
+done
+echo "done."

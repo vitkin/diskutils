@@ -1,0 +1,12 @@
+#!/bin/bash
+if [[ "$1" = "--help" ]]; then
+  echo "$(basename $0) sha256sum-dir [root-directory] ... creates rootNN.sha256s files containing all the sha256sums of the files in root-directory" >&2
+  echo >&2;
+
+else
+  let n=0; dir="$(dirname "${1:-.}")"; outfile="$dir/root$n.sha256s";  while [ -e "$outfile" ]; do let n=n+1; outfile="$dir/root$n.sha256s"; done
+  rootdir="${2:-/}"; rootdir="${rootdir%/}/";
+  #find / -type f | egrep -v "^/(sys|proc|selinux|dev|media|run)/" | sed 's#\\#\\\\#g' | while read file; do sha256sum "$file"; done >$outfile
+  find ${rootdir} -type f -print0 | tr '\n []*\000' '?????\n' | egrep -v "^/(sys|proc|selinux|dev|media|run)/" | sed 's#\\#\\\\#g' | while read file; do sha256sum $file; done | sed "s# ${rootdir}# /#" >$outfile
+  echo $outfile ready >&2
+fi
