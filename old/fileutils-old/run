@@ -1,0 +1,23 @@
+#!/bin/bash
+
+if [[ ( -z "$1" || ! -e "$1.c"  ) && "$1" != "binpatch" ]]; then
+  echo run sparsefile-rescue/sparsefile-restore/bindiff params
+
+else
+  program="$1"; shift
+  rm -f build/$program build/sparsefile-writeout.o  
+
+  if [[ "$program" != "sparsefile-restore" && "$program" != "binpatch" ]]; then
+    gcc -c -Wall sparsefile-writeout.c -o build/sparsefile-writeout.o 2>&1 | head -n 20
+    gcc -gstabs -Wall build/sparsefile-writeout.o ${program}.c -o build/${program}
+  else
+    # sparsefile-restore
+    rm -f build/binpatch
+    gcc -gstabs -Wall sparsefile-restore.c -o build/sparsefile-restore
+    ln -s sparsefile-restore build/binpatch
+  fi
+
+  build/$program "$@"
+
+fi
+

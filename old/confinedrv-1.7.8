@@ -101,21 +101,6 @@ list_partitions() {
   fi
 }
 
-list_partitions_plus_end() {
-  if [[ virtual -eq 0 ]]; then
-    LANG=en_US.UTF-8 parted "$1" <<<$'unit s\nprint\nquit\n' | sort -g -k 2 -s; 
-    if [[ -b "$1" ]]; then 
-      let size=$(blockdev --getsz "$1");
-    else
-      let size=$(stat -c%s "$1");
-      let size=(size+511)/512
-    fi
-    echo "9999 ${size}s $((size-1))s none none";
-  else
-    cat "${1%.blocks}.parttbl";
-  fi
-}
-
 slurp_virtfile() {
   local cmdident start end virtstart;
   let virtual=0 virtmax=0;
@@ -864,7 +849,7 @@ processparams() {
 
 }
 
-let readout_mbr=0 usedd=0 skipend=0;
+let readout_mbr=0 usedd=0;
 
 while [[ $# -gt 0 ]]; do
 case "$1" in
@@ -884,7 +869,7 @@ case "$1" in
 	     echo -e "confinedrv compare-mbr --from myfile.mbr --with [/dev/]sda ... compare myfile.mbr with the beginning of /dev/sda"
 	     echo -e "confinedrv blank-mbr --into /dev/sda ... overwrite first 440 bytes with zeroes"
 	     echo -e "confinedrv test-mbr-blanked --from [/dev/]sda ... check if first 440 bytes are zero"
-	     echo -e "confinedrv readout-parttbl [--usedd] [--skipend] --from [/dev/]sda --into disk-images/sda.xx ... reads partition table into files sda.blocks (binary) and sda.parttbl (text)"
+	     echo -e "confinedrv readout-parttbl [--usedd] --from [/dev/]sda --into disk-images/sda.xx ... reads partition table into files sda.blocks (binary) and sda.parttbl (text)"
 	     echo -e "confinedrv sdx=1,2,3 parttbl=sda.xx sdx1=sda1.part sdx2=sda2.part sdx3=sda3.part ... uses the partition table image files sda.blocks (binary) and sda.parttbl (text)\n"
 	     subcommand="";
 	     set --
@@ -994,7 +979,6 @@ case "$1" in
 	  fi
           shift;;
   --usedd) usedd=1;;
-  --skipend) skipend=1;;
   -*) err "unknown option $1"; echo >&2; exit 201;; 
 
   readout-mbr|compare-mbr|reinstall-mbr|blank-mbr|test-mbr-blanked|readout-parttbl) subcommand="$1";;
@@ -1110,13 +1094,10 @@ elif [[ "$subcommand" = "readout-parttbl" ]]; then
 	else let isext=0; 
       fi
 
-      #echo "#$start $end"
       if [[ prevend -lt start && isext -eq 0 ]]; then
 	let blockstart=$(rounddown prevend);
 	let blockend=$(roundup start);
 	let blocknum=blockend-blockstart;
-	#echo "$prevend $start"
-	#echo "$blockstart $blocknum $virtoffset # $((blockstart*512)) size=$((blocknum*512)) seek=$((virtoffset*512))" 
 	if [[ replok -eq 1 ]]; then
 	  binreplace --quiet if="$from" skip=$((blockstart*512)) size=$((blocknum*512)) seek=$((virtoffset*512)) of="$blocks_file"
 	else
@@ -1126,10 +1107,10 @@ elif [[ "$subcommand" = "readout-parttbl" ]]; then
 	let blocks_end[virtual]=blockend
 	let blocks_virtstart[virtual]=virtoffset
 	let virtual+=1 virtoffset+=blocknum
+	let prevend=end
       fi
-      let prevend=end
     fi
-  done < <( if [[ skipend -eq 0 ]]; then list_partitions_plus_end "$from"; else list_partitions "$from"; fi | tee "$parttbl_file"; )
+  done < <( list_partitions "$from" | tee "$parttbl_file"; )
   for((i=0;i<virtual;i++)); do
     echo "blocks ${blocks_start[i]} ${blocks_end[i]} ${blocks_virtstart[i]}";
   done >>"$parttbl_file"

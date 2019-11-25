@@ -1,13 +1,7 @@
 //
-// program written by Elmar Stellnberger on 2015-10-03
-//                    extended for binpatch between 2015-10-07/08
+// program written by Elmar Stellnberger on 2015-10-3
 //                    email: estellnb@elstel.org
 //
-// This program may be used under the terms of GPLv3; see: https://www.gnu.org/licenses/gpl-3.0.en.html.
-// If you apply changes please sign our contributor license agreement at https://www.elstel.org/license/CLA-elstel.pdf
-// so that your changes can be included into the main trunk at www.elstel.org/software/ - look here for other interesting content!
-//
-
 #define _GNU_SOURCE
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -26,7 +20,7 @@ enum { SparsefileRestore, BinPatch } invocatedas;
 
 void help() {
   if( invocatedas == SparsefileRestore )
-    printf("sparsefile-restore [--rescue] ii=compact.simg [of=sparse.file]\n"
+    printf("sparsefile-restore [--rescue] ii=compact.simg of=sparse.file\n"
 	   "                   --size/--table ii=compact.simg\n"
 	   "  --size ............... print size of the target file\n"
 	   "  --check .............. do not print anything, just check the allocation table for validity (bash: check $?)\n"
@@ -38,7 +32,7 @@ void help() {
   else 
     printf("binpatch --replace ii=compact.simg of=sparse.file\n"
 	   "                   --size/--table ii=compact.simg\n"
-	   "  --replace .... modify sparse.file in place instead of copying and keeping the old file around\n"
+	   "  --replace .... modify sparse.file in place instead of keeping the old file around\n"
 	   "  --size/-s ............... print final size of the target file after modification would be applied\n"
 	   "  --check/-c .............. do not print anything, just check the allocation table for validity (bash: check $?)\n"
 	   "  [--rescue/-r] --print-table ... print allocation table\n"
@@ -73,7 +67,7 @@ bool poweroftwo( long long n ) {
   return n == ( 1<<i );
 }
 
-void readIn( int fd, char *buf, ssize_t len ) { register int ret;
+inline void readIn( int fd, char *buf, ssize_t len ) { register int ret;
   while( len > 0 && ( ( ret = read(fd,buf,len) ) > 0 || ( ret==-1 && errno == EINVAL ) ) ) if( ret >= 0 ) { buf += ret; len -= ret; };
   if( ret == -1 ) { 
     perror("reading input file");
@@ -86,7 +80,7 @@ void readIn( int fd, char *buf, ssize_t len ) { register int ret;
   }
 }
 
-void writeOut( int fd, char *buf, ssize_t len ) { register int ret;
+inline void writeOut( int fd, char *buf, ssize_t len ) { register int ret;
   while( len > 0 && ( ( ret = write(fdout,buf,len) ) >= 0 || ( ret==-1 && errno == EINVAL ) ) ) if( ret >= 0 ) { buf += ret; len -= ret; };
   if( ret == -1 ) { 
     perror("writing output file");
@@ -108,9 +102,8 @@ bool dataok = true;
 
 int main( int argc, char *argv[] ) {
   bool cmdlineerr = false, lastoptgone = false, size = false, check = false, rescue = false, printtable = false;
-  off_t tinyfilepos; int mempos; bool tiny = false, overwrite = false, dense = false, replace = false; 
+  off_t tinyfilepos; int mempos; bool tiny = false, overwrite = false, dense = false; struct Segment *segm;
   char *inp_imagename = NULL, *outp_filename = NULL; int flags = 0, mode = 0664, err=0; int t; long long s; bool firstrun;
-  struct Segment *segm;
   endianess.i = 1; if( endianess.c[0] != 1 ) { fprintf(stderr,"program needs to be compiled on a little endian machine; exiting."); exit(6); }
   self = basename(*argv); argv++; argc--;
   if(!strcmp(self,"sparsefile-restore")) invocatedas = SparsefileRestore;
@@ -134,7 +127,6 @@ int main( int argc, char *argv[] ) {
 	}
       } else if(!strcasecmp(arg+2,"size")) size = true;
       else if(!strcasecmp(arg+2,"check")) check = true;
-      else if(!strcasecmp(arg+2,"replace")) replace = true;
       else if(!strcasecmp(arg+2,"rescue")) rescue = true;
       else if(!strcasecmp(arg+2,"tiny")) tiny = true;
       else if(!strcasecmp(arg+2,"print-table")) printtable = true;
@@ -151,29 +143,17 @@ int main( int argc, char *argv[] ) {
       }
     argv++; argc--;
   }
-  
-  // check whether given command line options are sane
   if( cmdlineerr ) { fputc('\n',stderr); return 2; }
   if(!inp_imagename) { fprintf(stderr,"please specify input imagename with ii=imagename.\n\n"); return 2; }
   if(outp_filename) {
     if(size||check)  {
       fprintf(stderr,"the --size and --check options are thought to be used without an output filename.\n\n"); return 2;
-    if( invocatedas == BinPatch ) {
-      if( !replace || overwrite ) fprintf(stderr,"not implemented: copying patch application mode with if=.. and of=...\n");
-      if( !replace ) { fprintf(stderr,"please specify --replace for of=outputfile\n\n"); return 2; }
-      if( overwrite ) { fprintf(stderr,"of=outputfile needs to be replaced in place by a patched version rather than overwritten entirely without consideration of the priorily existant file.\n\n"); return 2; }
-    }
   }} else {
     if(!(size||check||printtable))  {
       fprintf(stderr,"please specify output filename with of=filename.\n\n"); return 2;
   }};
-  if( invocatedas == BinPatch && dense ) {
-    fprintf(stderr,"of=outputfile needs to be seekable for --replace: do not specify --dense.\n\n");
-    return 2;
-  }
   //printf("ii=%s, of=%s\n", inp_imagename, outp_filename );
   
-  // open input filename; read header and trailer
   fdin = open( inp_imagename, O_RDONLY | O_LARGEFILE );
   if( fdin == -1 ) {
     fdin = open( inp_imagename, O_RDONLY );
@@ -265,12 +245,10 @@ int main( int argc, char *argv[] ) {
 
   headersize = 0; // better trust on running imgfileoffsets 
 
-  // open output image and write changes
   if( outp_filename ) {
     long long writepos = 0, desiredpos, readpos = headersize, goodreadpos, chunksize; off_t pret, seekoffs; ssize_t block;
 
-    flags = O_WRONLY | ( -!tiny & O_LARGEFILE );
-    if( !replace ) flags = flags | O_CREAT | ( -!overwrite & O_EXCL ) | ( -overwrite & O_TRUNC );
+    flags = O_WRONLY | ( -!tiny & O_LARGEFILE ) | O_CREAT | ( -!overwrite & O_EXCL ) | ( -overwrite & O_TRUNC );
     fdout = open( outp_filename, flags, mode );
     if(fdout==-1) { fprintf(stderr,"error opening file '%s': %s.\n\n",outp_filename,strerror(errno)); return 3; }
 
@@ -305,24 +283,18 @@ int main( int argc, char *argv[] ) {
 
     }
 
-    if( writepos < filesize || replace ) {
+    if( writepos < filesize ) {
       tinyfilepos = filesize;
       if( tinyfilepos == filesize ) ftruncate( fdout, tinyfilepos );
-      else if( invocatedas == BinPatch && replace ) {
-	  fprintf(stderr,"can not truncate file size to a length greater than 4GB because of a too small size of the off_t datatype on 32bit systems; please file a bug against kernel.org demanding this type to become at least 64bit wide.\n");
-	  fprintf(stderr,"the resulting file my now have a length greater or smaller than %lli.\n", filesize );
-      } else {
-	assert( invocatedas == SparsefileRestore );
+      else {
 	desiredpos = filesize - 512;
 	while( writepos < desiredpos ) {
 	  seekoffs = min( desiredpos - writepos, MaxSigned(off_t) );
 	  pret = lseek( fdout, seekoffs, SEEK_CUR ); if( pret == -1 && errno != EOVERFLOW ) { perror("seek on output file"); return 5; }
 	  writepos += seekoffs;
 	}
-	if( writepos < filesize ) {
-	  bzero( buffer, min( filesize - writepos, 512 ) );
-	  writeOut( fdout, buffer, min( filesize - writepos, 512 ) );
-	}
+	bzero(buffer,512);
+	writeOut( fdout, buffer, 512 );
     }}
 
   }
